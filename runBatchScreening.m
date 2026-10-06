@@ -26,7 +26,9 @@ function summaryTable = runBatchScreening(imagesDir, outputDir)
 %   summaryTable - table with one row per image: filename, gradeable,
 %     focus, entropy, icdrGrade_deepLearning (NaN if simulated),
 %     confidence, icdrGrade_clinicalRules, gradesAgree, nvFlagged,
-%     gradCamOnDisc, referable (either grade >= 2), status, errorMessage
+%     gradCamOnDisc, referable (either grade >= 2), status, errorMessage,
+%     qualityDecision (PASS/BORDERLINE/FAIL/ERROR - filter triage on this,
+%     not status alone), qualityReasons (| -joined, may be empty)
 %
 % Requires: same toolboxes as production_inference.m.
 
@@ -50,7 +52,7 @@ if ~haveTrainedModels
 end
 
 n = numel(files);
-rows = cell(n, 12);
+rows = cell(n, 14);
 for i = 1:n
     fname = files(i).name;
     res = screenOneImage(fullfile(files(i).folder, fname), models);
@@ -64,7 +66,8 @@ for i = 1:n
         bestGrade = icdrDL; if isnan(bestGrade), bestGrade = icdrRule; end
         referable = double(bestGrade >= 2);
     end
-    rows(i,:) = {fname, res.status, res.focus, res.entropy, icdrDL, res.conf, icdrRule, agree, nvFlag, onDisc, referable, res.errorMessage};
+    rows(i,:) = {fname, res.status, res.focus, res.entropy, icdrDL, res.conf, icdrRule, agree, nvFlag, onDisc, referable, res.errorMessage, ...
+        res.qualityDecision, strjoin(res.qualityReasons, ' | ')};
 
     if mod(i,50) == 0 || i == n
         fprintf('  %d/%d processed\n', i, n);
@@ -73,7 +76,7 @@ end
 
 summaryTable = cell2table(rows, 'VariableNames', {'filename','status','focus','entropy', ...
     'icdrGrade_deepLearning','confidence','icdrGrade_clinicalRules','gradesAgree', ...
-    'nvFlagged','gradCamOnDisc','referable','errorMessage'});
+    'nvFlagged','gradCamOnDisc','referable','errorMessage','qualityDecision','qualityReasons'});
 
 outCsv = fullfile(outputDir, sprintf('batch_summary_%s.csv', datestr(now,'yyyymmdd_HHMMSS')));
 writetable(summaryTable, outCsv);
@@ -81,12 +84,13 @@ writetable(summaryTable, outCsv);
 nOk = sum(strcmp(summaryTable.status,'ok'));
 nUngradeable = sum(strcmp(summaryTable.status,'ungradeable'));
 nError = sum(strcmp(summaryTable.status,'error'));
+nBorderline = sum(strcmp(summaryTable.qualityDecision,'BORDERLINE'));
 nReferable = sum(summaryTable.referable == 1);
 nDisagree = sum(summaryTable.gradesAgree == 0);
 nFlaggedGradCam = sum(summaryTable.gradCamOnDisc == 1);
 
 fprintf('\n=== Batch complete: %s ===\n', outCsv);
-fprintf('Processed: %d | Ungradeable: %d | Errors: %d\n', nOk, nUngradeable, nError);
+fprintf('Processed: %d | Ungradeable: %d | Errors: %d | BORDERLINE (gradeable-with-warning): %d\n', nOk, nUngradeable, nError, nBorderline);
 if haveTrainedModels
     fprintf('Referable (Level 2+): %d | AI/rule-engine disagreements: %d | Grad-CAM-on-disc flags: %d\n', ...
         nReferable, nDisagree, nFlaggedGradCam);

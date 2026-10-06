@@ -113,10 +113,11 @@ No test tuning in code. All VERIFIED (static + synthetic).
 
 ## 4. Test results (executed here, Python 3.12, no MATLAB/data/weights)
 
-- `tests/test_stages123_hardening.py`: **81/81 PASS** (grading + quality
+- `tests/test_stages123_hardening.py`: **85/85 PASS** (grading + quality
   + chain + adversarial + release-hardening + audit-findings pins:
   callable `screenOneImage.m`, single core, applied-T exposure,
-  training audit, agreement registration).
+  training audit, batch decision columns, temp serial granularity,
+  agreement registration).
 - `tests/test_stage12_contract.py`: **49/49 PASS** (canonical core,
   single fusion builder, configs).
 - `tests/python/test_quality_mirror.py`: **20/20 PASS**.
@@ -142,6 +143,11 @@ dedupe; DIARETDB1 inspection; 512v768; temperature run.
 
 - Grading hyperparams live in `gradingConfig` (Stage-3 centralized;
   no action).
+- `runBatchScreening` CSV carries `qualityDecision/qualityReasons`
+  (appended; first 12 columns unchanged) with a BORDERLINE triage count.
+- `bridge_server.py` still forwards only legacy keys (backend change out
+  of scope) — new quality/temperature keys need Stage-4 bridge wiring
+  plus a live bridge test.
 - GT-vs-predicted is a caller guarantee the builder cannot verify
   pixel-wise (documented at call sites; enforced by
   `segmentationNotTrained` gate + review discipline).

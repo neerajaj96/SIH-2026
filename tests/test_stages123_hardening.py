@@ -273,6 +273,17 @@ def test_audit_findings():
     check("audit policy explicit (audit-only vs enforce)",
           "audit-only" in audit and "enforce" in audit, "silent curation")
     check("audit writes CSV manifest", "writetable" in audit and "csv" in audit.lower(), "no manifest")
+    # batch triage exposes per-file quality decision (defect A fix)
+    batch = txt("runBatchScreening.m")
+    check("batch CSV carries qualityDecision/qualityReasons",
+          "qualityDecision" in batch and "qualityReasons" in batch, "BORDERLINE invisible in triage")
+    check("batch first-12 columns unchanged (append-only)",
+          "cell(n,14)" in batch.replace(" ", ""), "column drift")
+    check("batch counts BORDERLINE separately",
+          "BORDERLINE" in batch, "no borderline triage count")
+    # temp serial includes byte size (defect C fix)
+    check("temp serial keys on datenum+bytes",
+          "d.bytes" in txt("getOrLoadCachedModels.m"), "sub-second rewrite missed")
 
 
 TESTS = [test_grading_contract, test_quality_canonical, test_chain_shapes,

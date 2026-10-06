@@ -52,11 +52,13 @@ end
 end
 
 function s = localTempSerial()
-% Comparable serial for the temperature artifact: datenum when present,
-% '' when absent. dir() is one cheap stat call - no model I/O.
+% Comparable serial for the temperature artifact: datenum + byte size when
+% present, '' when absent. dir() is one cheap stat call - no model I/O.
+% Bytes are included so two calibrations within one datenum tick still
+% invalidate (datenum granularity alone could miss sub-second rewrites).
 if isfile('calibrated_temperature.mat')
     d = dir('calibrated_temperature.mat');
-    s = d.datenum;
+    s = sprintf('%.6f_%d', d.datenum, d.bytes);
 else
     s = '';
 end
