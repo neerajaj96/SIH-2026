@@ -2,6 +2,19 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<!--
+  Content-Security-Policy (static-file compatible subset): this console is
+  a single file with inline script/style, Google Fonts, canvas data-URL
+  thumbnails, and fetch() to the operator-configured bridge URL, so
+  script-src/style-src cannot be locked to 'self' without breaking it.
+  What this policy DOES enforce: no plugins/frames/form-exfiltration,
+  images only from self/data:/blob:, and connect-src limited to self +
+  the localhost development bridge. PRODUCTION deployments behind a
+  same-origin reverse proxy should REPLACE this tag with a response
+  header narrowing connect-src to the proxy origin (tradeoff documented
+  in STAGE7/STAGE9 handoffs: a static tag cannot track a configurable URL).
+-->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' http://localhost:8000; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'">
 <title>NetraSetu — DR Screening Console</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -160,6 +173,8 @@ select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9
   <div style="display:flex;gap:8px;align-items:center;margin-top:8px;font-size:12px;color:var(--ink-soft)">
     <label for="bridgeUrl" style="font-weight:600">Bridge</label>
     <input id="bridgeUrl" type="text" value="http://localhost:8000" autocomplete="off" spellcheck="false" style="flex:1;min-width:0">
+    <label for="apiKey" style="font-weight:600">API key</label>
+    <input id="apiKey" type="password" placeholder="bridge key" autocomplete="off" spellcheck="false" style="flex:1;min-width:0">
     <button id="demoBtn" class="swap" type="button" aria-pressed="false">Use demo data</button>
   </div>
 </div>
@@ -255,6 +270,16 @@ function bridgeURL(){
   const v = (document.getElementById('bridgeUrl').value || '').trim();
   return v || BRIDGE_DEFAULT;
 }
+// API key lives in sessionStorage ONLY (cleared with the tab; never
+// localStorage, never logged, never rendered). Absent key -> bridge
+// answers 401/503; the UI surfaces that, never a mock result.
+function apiKey(){
+  try{ return sessionStorage.getItem('netrasetu.apiKey') || ''; }catch(e){ return ''; }
+}
+document.getElementById('apiKey').addEventListener('change', ()=>{
+  try{ sessionStorage.setItem('netrasetu.apiKey', document.getElementById('apiKey').value); }catch(e){}
+  appMode.demoForced = false; checkBridge();
+});
 function setMode(m, note){
   appMode.current = m;
   const badge = document.getElementById('modeBadgeText');
@@ -304,7 +329,7 @@ document.querySelectorAll('.roles button').forEach(btn=>{
 /* ---------- mock scenario bank (deterministic, cycles per upload) ---------- */
 const CLASS_NAMES = ['No DR','Mild NPDR','Moderate NPDR','Severe NPDR','Proliferative DR'];
 const SCENARIOS = [
-  { dl:0, conf:0.94, rule:0, evidence:['No visible DR abnormalities detected.'], nv:false, gradCamOnDisc:false },
+  { dl:0, conf:0.94, rule:null, evidence:['Illustrative demo case: no graded findings in this mock scenario.'], nv:false, gradCamOnDisc:false },
   { dl:1, conf:0.88, rule:1, evidence:['Microaneurysms only.'], nv:false, gradCamOnDisc:false },
   { dl:2, conf:0.85, rule:2, evidence:['Lesions present beyond microaneurysms (hemorrhage counts by quadrant: [3 1 0 0]; exudates present: 1), but below Severe NPDR criteria.'], nv:false, gradCamOnDisc:false },
   { dl:3, conf:0.91, rule:3, evidence:['Severe hemorrhages (>20) in all 4 quadrants (counts: [25 22 30 21]) — the "4" of the 4-2-1 rule.'], nv:false, gradCamOnDisc:false },
@@ -406,13 +431,28 @@ runBtn.addEventListener('click', async ()=>{
     try{
       const fd = new FormData();
       fd.append('image', state.selectedFile, state.selectedFile.name);
-      const resp = await fetch(bridgeURL() + '/screen', {method:'POST', body:fd});
+      const headers = {};
+      const key = apiKey();
+      if(key) headers['X-API-Key'] = key;
+      // Client request ID: allowlisted characters only; the bridge mints
+      // one when absent/invalid (see bridge_schema.valid_request_id).
+      headers['X-Request-ID'] = 'web-' + Date.now().toString(36) + '-' + Math.floor(Math.random()*1e6).toString(36);
+      const resp = await fetch(bridgeURL() + '/screen', {method:'POST', headers:headers, body:fd});
       if(resp.status === 429){
         document.getElementById('resultBody').innerHTML = '<div class="flag-box">Screening engine busy — please retry shortly. No result produced.</div>';
+      } else if(resp.status === 401){
+        document.getElementById('resultBody').innerHTML = '<div class="flag-box">Bridge rejected the request (missing/invalid API key). Enter the bridge key above; nothing was graded.</div>';
+      } else if(resp.status === 503){
+        let rid = '';
+        try{ rid = (await resp.clone().json()).requestId || ''; }catch(e){}
+        setMode(MODES.OFFLINE, 'service unavailable');
+        document.getElementById('resultBody').innerHTML = '<div class="flag-box">Screening unavailable (bridge service error) — no result produced. Nothing was graded.'+(rid?' Reference: '+escapeHtml(rid):'')+'</div>';
+        runBtn.disabled=false;
+        return;
       } else if(!resp.ok){
-        let detail = '';
-        try{ detail = (await resp.json()).detail || ''; }catch(e){}
-        document.getElementById('resultBody').innerHTML = '<div class="flag-box">Screening failed ('+resp.status+') — '+escapeHtml(detail||'bridge error')+'. No result produced; nothing was graded.</div>';
+        let detail = '', rid = '';
+        try{ const j = await resp.json(); detail = j.detail || ''; rid = j.requestId || ''; }catch(e){}
+        document.getElementById('resultBody').innerHTML = '<div class="flag-box">Screening failed ('+resp.status+') — '+escapeHtml(detail||'bridge error')+'. No result produced; nothing was graded.'+(rid?' Reference: '+escapeHtml(rid):'')+'</div>';
       } else {
         const sc = await resp.json();
         renderResult(sc, pid, MODES.LIVE);

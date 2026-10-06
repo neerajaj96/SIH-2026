@@ -92,13 +92,14 @@ documented but couldn't find.
   a bounded browser-local fallback exists and is labeled non-clinical —
   test either path specifically before relying on it live.
 - `bridge_server.py` serializes screening on one worker thread (second
-  concurrent caller gets 429), enforces the 15 MB cap, and forwards the
-  versioned API schema — but the live engine call, concurrency under
-  load, and struct conversion have not been run against real MATLAB
-  here (MATLAB-GATED). It also has no authentication and a wide-open
-  CORS policy (SECURITY-GATED); both need tightening before this leaves
-  a laptop. Static frontend: READY-TO-CONFIGURE; MATLAB bridge host:
-  required; live deployment: NOT VERIFIED.
+  concurrent caller gets 429), enforces the 15 MB cap, magic-signature
+  and dimension validation, API-key auth (fail-closed, no anonymous
+  mode), CORS allowlist, rate limits, and request IDs — but the live
+  engine call, concurrency under load, and struct conversion have not
+  been run against real MATLAB here (MATLAB-GATED). No pentest, TLS, or
+  deployment verification performed here (SECURITY-GATED/
+  DEPLOYMENT-GATED). Static frontend: READY-TO-CONFIGURE; MATLAB bridge
+  host: required; live deployment: NOT VERIFIED.
 - The `db` capability backing the demo queue caps out around 5,000
   documents — nowhere near "100,000+ patients annually." See
   `production_schema.sql` for the real migration target.

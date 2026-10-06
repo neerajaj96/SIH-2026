@@ -22,7 +22,7 @@ See `SIH26038_project_handoff.md` for architecture decisions and `LIMITATIONS.md
 ## Status — validated vs not (from handoff + self-tests)
 
 Solid (tested via `runSelfTests.m`): quality config + calibrator math, loss functions, QWK, 4-2-1 logic (7/7), OD/fovea sanity check, Erlang-C math, patient-level split guard. Full quality image tests: `testQualitySubsystem.m` (MATLAB, run in MATLAB) + `tests/python/test_quality_mirror.py` (20/20 PASS here) — see `QUALITY_CONTRACT.md` for measured-vs-assumed.
-Not yet real: no trained `.mat` weights, no end-to-end MATLAB run with toolboxes, venous beading / IRMA detectors missing, neovascularization is a proxy, `netrasetu.html` defaults LIVE against `bridge_server.py` (explicit DEMO fallback; bridge untested live here), bridge has open CORS + no auth (SECURITY-GATED), SimEvents paths need interactive verification. See `STAGE7_NETRASETU_HANDOFF.md`.
+Not yet real: no trained `.mat` weights, no end-to-end MATLAB run with toolboxes, venous beading / IRMA detectors missing, neovascularization is a proxy, `netrasetu.html` defaults LIVE against `bridge_server.py` (explicit DEMO fallback; bridge untested live here), bridge requires `SIH_API_KEY` (fail-closed, no anonymous mode), CORS allowlist + rate limits configured via env (SECURITY-GATED deployment items), SimEvents paths need interactive verification. See `STAGE7_NETRASETU_HANDOFF.md`, `STAGE9_SECURITY_HANDOFF.md`.
 
 ## Quickstart
 

@@ -36,10 +36,13 @@ def _stub_modules():
     fastapi = types.ModuleType("fastapi")
     fastapi.FastAPI = type("FastAPI", (), {"__init__": lambda s, **k: None,
                                            "add_middleware": lambda s, *a, **k: None,
+                                           "middleware": lambda *a, **k: (lambda f: f),
                                            "get": lambda s, *a, **k: (lambda f: f),
-                                           "post": lambda s, *a, **k: (lambda f: f)})
+                                           "post": lambda s, *a, **k: (lambda f: f),
+                                           "exception_handler": lambda s, *a, **k: (lambda f: f)})
     fastapi.UploadFile = type("UploadFile", (), {})
     fastapi.File = lambda *a, **k: None
+    fastapi.Request = type("Request", (), {})
     class HTTPException(Exception):
         def __init__(self, status_code=500, detail=""):
             self.status_code = status_code
@@ -132,8 +135,8 @@ def test_schema_module():
           "screening_engine" not in txt("bridge_server.py"), "stale CM")
     check("retry path explicit (_screen_once x2, single _do_screen)",
           txt("bridge_server.py").count("def _do_screen(") == 1, "duplicate screener")
-    check("no image/PII in logs",
-          "request start/end" in txt("bridge_server.py").lower() or "screen ok status" in txt("bridge_server.py"), "logging gap")
+    check("no image/PII in logs (structured allowlisted fields)",
+          "_log(" in txt("bridge_server.py") and "dl={result" not in txt("bridge_server.py"), "logging gap")
 
 
 def test_frontend_modes():
