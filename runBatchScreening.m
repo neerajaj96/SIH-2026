@@ -47,9 +47,9 @@ fprintf('Found %d images. Starting batch run...\n', numel(files));
 models = getOrLoadCachedModels();
 haveTrainedModels = models.haveTrainedModels;
 if ~haveTrainedModels
-    warning(['runBatchScreening:simulated - no trained models found. Every icdrGrade_deepLearning value ' ...
+    warning(['runBatchScreening:simulated - no trained models found in working directory %s. Every icdrGrade_deepLearning value ' ...
              'in the output will be NaN, and icdrGrade_clinicalRules will be based on placeholder masks. ' ...
-             'This still exercises the full pipeline and timing, but results are not real predictions.']);
+             'This still exercises the full pipeline and timing, but results are not real predictions.'], pwd);
 end
 
 n = numel(files);
@@ -57,7 +57,22 @@ rows = cell(n, 15);
 ruleStatuses = cell(n, 1);
 for i = 1:n
     fname = files(i).name;
-    res = screenOneImage(fullfile(files(i).folder, fname), models);
+    % Per-file isolation: imread failures (missing/corrupt/unreadable
+    % files) throw OUTSIDE the pipeline's own try/catch, so without this
+    % local catch one bad file halts the whole batch. An unreadable file
+    % becomes an ERROR row (never a valid-looking clinical result).
+    try
+        res = screenOneImage(fullfile(files(i).folder, fname), models);
+    catch ME
+        res = struct('status', 'error', 'errorMessage', ME.message, ...
+            'focus', NaN, 'entropy', NaN, 'roiPassed', false, ...
+            'qualityDecision', 'ERROR', 'qualityReasons', {ME.message}, ...
+            'qualityGuidance', {{}}, 'focusThresh', NaN, 'entropyThresh', NaN, ...
+            'qualityCalibrated', false, 'dl', NaN, 'conf', NaN, ...
+            'rule', NaN, 'ruleStatus', 'INVALID', ...
+            'evidence', {{}}, 'nv', false, 'nvStatus', 'INVALID', ...
+            'gradCamOnDisc', false);
+    end
     ruleStatuses{i} = res.ruleStatus;
 
     icdrDL = res.dl; icdrRule = res.rule;
@@ -85,7 +100,7 @@ summaryTable = cell2table(rows, 'VariableNames', {'filename','status','focus','e
     'icdrGrade_deepLearning','confidence','icdrGrade_clinicalRules','gradesAgree', ...
     'nvFlagged','gradCamOnDisc','referable','errorMessage','qualityDecision','qualityReasons','ruleStatus'});
 
-outCsv = fullfile(outputDir, sprintf('batch_summary_%s.csv', datestr(now,'yyyymmdd_HHMMSS')));
+outCsv = uniqueArtifactPath(outputDir, 'batch_summary', '.csv');
 writetable(summaryTable, outCsv);
 
 nOk = sum(strcmp(summaryTable.status,'ok'));

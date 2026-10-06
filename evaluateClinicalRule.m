@@ -80,7 +80,7 @@ results.dlAgreeRate = sum(dlSuff(bothGraded) == rg(bothGraded)) / max(sum(bothGr
 
 manifest = table(imagePaths(:), grades(:), ruleGrade, ruleStatus, dlGrade, ...
     'VariableNames', {'imagePath','labelICDR','ruleGrade','ruleStatus','dlGrade'});
-manifestCsv = fullfile(p.Results.OutputDir, sprintf('clinical_rule_eval_%s.csv', datestr(now,'yyyymmdd_HHMMSS')));
+manifestCsv = uniqueArtifactPath(p.Results.OutputDir, 'clinical_rule_eval', '.csv');
 writetable(manifest, manifestCsv);
 results.manifestCsv = manifestCsv;
 fprintf('Clinical-rule eval: n=%d sufficient=%d insufficient=%d accuracy(sufficient)=%.3f [%.3f,%.3f] referable sens=%.3f [%.3f,%.3f] spec=%.3f [%.3f,%.3f] dlAgree=%.3f\n', ...

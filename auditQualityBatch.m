@@ -76,7 +76,7 @@ summaryTable = cell2table(rows, 'VariableNames', {'filename','decision','isGrade
     'coverage','circularity','underexpFrac','overexpFrac','specularFrac','contrastP95P5', ...
     'reasons','guidance'});
 
-outCsv = fullfile(outputDir, sprintf('quality_audit_%s.csv', datestr(now,'yyyymmdd_HHMMSS')));
+outCsv = uniqueArtifactPath(outputDir, 'quality_audit', '.csv');
 writetable(summaryTable, outCsv);
 
 nPass = sum(strcmp(summaryTable.decision,'PASS'));

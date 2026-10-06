@@ -165,7 +165,9 @@ end
 % graphics only - NOT Report Generator), then a report in whichever
 % format the environment actually supports. ---
 disp('Rendering supporting images...');
-landmarkPath = fullfile(scriptDir, 'dr_report_landmarks.png');
+% Collision-proof artifact names (repeated runs never overwrite each
+% other; readability preserved as stem_timestamp).
+landmarkPath = uniqueArtifactPath(scriptDir, 'dr_report_landmarks', '.png');
 fig = figure('Visible','off');
 imshow(enhancedRGB); hold on;
 % NaN/unreliable landmarks: skip the marker (never crash rendering after
@@ -181,7 +183,7 @@ hold off;
 exportgraphics(fig, landmarkPath);
 close(fig);
 
-lesionPath = fullfile(scriptDir, 'dr_report_lesion_mask.png');
+lesionPath = uniqueArtifactPath(scriptDir, 'dr_report_lesion_mask', '.png');
 imwrite(lesionMask, lesionPath);
 
 gradcamPath = '';
@@ -189,7 +191,7 @@ if haveTrainedModels && ~isempty(scoreMap)
     % Canonical explanation result (already ROI-masked at original
     % resolution by explainGradCAM) - displayed as-is, no second
     % computation or reinterpretation here.
-    gradcamPath = fullfile(scriptDir, 'dr_report_gradcam.png');
+    gradcamPath = uniqueArtifactPath(scriptDir, 'dr_report_gradcam', '.png');
     fig = figure('Visible','off');
     imshow(enhancedRGB); hold on;
     imagesc(scoreMap, 'AlphaData', 0.5);
@@ -205,7 +207,7 @@ if haveReportGen
         import mlreportgen.report.*
         import mlreportgen.dom.*
 
-        rpt = Report(fullfile(scriptDir, 'DR_Clinical_Report'), 'pdf');
+        rpt = Report(uniqueArtifactPath(scriptDir, 'DR_Clinical_Report', '.pdf'), 'pdf');
 
         titlePg = TitlePage;
         titlePg.Title = 'Automated Diabetic Retinopathy Assessment';
@@ -259,7 +261,7 @@ if haveReportGen
         add(rpt, Chapter('Title','Detected Lesion Mask'));
         add(rpt, Image(lesionPath));
 
-        if haveTrainedModels
+        if haveTrainedModels && ~isempty(gradcamPath)
             add(rpt, Chapter('Title','Grad-CAM Overlay'));
             add(rpt, Image(gradcamPath));
             add(rpt, Paragraph(['Caveat: ' r.explainChannelsCaveat]));
@@ -277,7 +279,7 @@ end
 
 if ~reportProducedAsPdf
     disp('Generating plain-text report (no PDF available)...');
-    txtPath = fullfile(scriptDir, 'DR_Clinical_Report_summary.txt');
+    txtPath = uniqueArtifactPath(scriptDir, 'DR_Clinical_Report_summary', '.txt');
     fid = fopen(txtPath, 'w');
     fprintf(fid, 'AUTOMATED DIABETIC RETINOPATHY ASSESSMENT\n');
     fprintf(fid, 'AI Screening Node #42 - generated %s\n', string(datetime('now')));
@@ -327,7 +329,7 @@ if ~reportProducedAsPdf
     fprintf(fid, '\n-- SUPPORTING IMAGES (saved alongside this file) --\n');
     fprintf(fid, 'Enhanced image with optic disc / fovea landmarks: %s\n', landmarkPath);
     fprintf(fid, 'Detected lesion mask: %s\n', lesionPath);
-    if haveTrainedModels
+    if haveTrainedModels && ~isempty(gradcamPath)
         fprintf(fid, 'Grad-CAM overlay: %s\n', gradcamPath);
         fprintf(fid, 'Caveat: %s\n', r.explainChannelsCaveat);
     end
