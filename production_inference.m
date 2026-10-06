@@ -59,8 +59,11 @@
 % --- 0. Config ---
 scriptDir = fileparts(mfilename('fullpath'));
 imagePath = fullfile(scriptDir, 'sample.jpg');
-focusThresh = 8;     % placeholder - see assessAndEnhanceImage.m / calibrateQualityThresholds.m
-entropyThresh = 3.5;
+qcfg = qualityConfig();
+[focusThresh, entropyThresh, qCalib] = qualityLoadCalibration(qcfg, scriptDir);
+if ~qCalib.isCalibrated
+    fprintf('Quality gate using canonical thresholds focus=%.2f entropy=%.2f (UNCALIBRATED - run calibrateQualityThresholds.m).\n', focusThresh, entropyThresh);
+end
 
 % Temperature: load a real calibrated value if one exists, otherwise fall
 % back to the old placeholder - LOUDLY labeled either way, in the report

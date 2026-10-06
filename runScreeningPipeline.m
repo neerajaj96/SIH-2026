@@ -52,7 +52,8 @@ end
 r.haveTrainedModels = models.haveTrainedModels;
 
 try
-    [isGradeable, enhancedRGB, enhancedGray, focus, ent, roiMask] = assessAndEnhanceImage(rawImage, 8, 3.5);
+    qcfg = qualityConfig();
+    [isGradeable, enhancedRGB, enhancedGray, focus, ent, roiMask] = assessAndEnhanceImage(rawImage, qcfg.focusThresh, qcfg.entropyThresh);
     r.focus = focus; r.entropy = ent; r.roiPassed = isGradeable;
     r.enhancedRGB = enhancedRGB; r.enhancedGray = enhancedGray; r.roiMask = roiMask;
     if ~isGradeable

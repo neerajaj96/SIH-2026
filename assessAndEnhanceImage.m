@@ -74,11 +74,12 @@ function [isGradeable, enhancedRGB, enhancedGray, focusScore, entropyScore, roiM
 %
 % Requires: Image Processing Toolbox
 
+cfg0 = qualityConfig();
 if nargin < 3 || isempty(entropyThresh)
-    entropyThresh = 3.5;
+    entropyThresh = cfg0.entropyThresh;
 end
 if nargin < 2 || isempty(focusThresh)
-    focusThresh = 8; % see the calibration note above and in the header comment
+    focusThresh = cfg0.focusThresh; % see the calibration note above and in the header comment
 end
 
 % --- 0. Normalize to RGB up front so every line after this can assume
@@ -95,7 +96,7 @@ rawImage = im2uint8(rawImage);
 % near the edges. Restrict both the quality metrics and the enhancement
 % to the actual fundus circle.
 grayFull = rgb2gray(rawImage);
-roiMask = grayFull > 12;
+roiMask = grayFull > cfg0.roiSeedThresh;
 roiMask = imfill(roiMask, 'holes');
 cc = bwconncomp(roiMask);
 if cc.NumObjects > 1
@@ -107,19 +108,19 @@ end
 % Pull the mask in from the circle's hard edge - the boundary between
 % black background and tissue is itself a sharp edge that would otherwise
 % inflate the focus score without saying anything about retinal focus.
-roiMask = imerode(roiMask, strel('disk', 8));
+roiMask = imerode(roiMask, strel('disk', cfg0.roiErodeDisk));
 if ~any(roiMask(:))
     roiMask = true(size(grayFull)); % degenerate input (all-black/all-white) - fall back rather than crash
 end
 
 % --- 2. Quality assessment, restricted to the ROI ---
-laplacianFilter = fspecial('laplacian', 0.2);
+laplacianFilter = fspecial('laplacian', cfg0.laplacianAlpha);
 laplacianImage = imfilter(double(grayFull), laplacianFilter, 'replicate');
 focusScore = var(laplacianImage(roiMask));
 
 hsvImage = rgb2hsv(rawImage);
 vChannel = hsvImage(:,:,3);
-entropyScore = localMaskedEntropy(vChannel, roiMask);
+entropyScore = localMaskedEntropy(vChannel, roiMask, cfg0.entropyBins);
 
 isGradeable = (focusScore >= focusThresh) && (entropyScore >= entropyThresh);
 
@@ -131,7 +132,7 @@ isGradeable = (focusScore >= focusThresh) && (entropyScore >= entropyThresh);
 % not a fixed pixel count - see the "ADDED THIS ROUND" header note for
 % why and what it reproduces.
 roiDiameter = sqrt(4 * nnz(roiMask) / pi); % equivalent-circle diameter of the detected fundus ROI
-bgRadius = max(round(0.05 * roiDiameter), 15); % 5% of ROI diameter, floor of 15px so tiny/degenerate ROIs don't collapse to a near-useless 1-2px disk
+bgRadius = max(round(cfg0.bgFraction * roiDiameter), cfg0.bgFloorPx); % fraction of ROI diameter, floored so tiny/degenerate ROIs don't collapse
 structuringElement = strel('disk', bgRadius);
 
 greenChannel = rawImage(:,:,2);
@@ -139,7 +140,7 @@ greenBackground = imopen(greenChannel, structuringElement);
 % ...via DIVISION (flat-fielding), not subtraction. Subtraction clips
 % straight to 0 in already-dim areas (common in the fundus periphery);
 % division rescales instead of crushing them to black.
-enhancedGray = localFlatFieldClaheDenoise(greenChannel, greenBackground, roiMask, structuringElement);
+enhancedGray = localFlatFieldClaheDenoise(greenChannel, greenBackground, roiMask, cfg0);
 enhancedGray(~roiMask) = 0;
 
 % ...then the same correction is applied per-channel so the classifier
@@ -149,7 +150,7 @@ enhancedRGB = rawImage;
 for c = 1:3
     chan = rawImage(:,:,c);
     bg = imopen(chan, structuringElement);
-    enhancedRGB(:,:,c) = localFlatFieldClaheDenoise(chan, bg, roiMask, structuringElement);
+    enhancedRGB(:,:,c) = localFlatFieldClaheDenoise(chan, bg, roiMask, cfg0);
 end
 for c = 1:3
     chanMasked = enhancedRGB(:,:,c);
@@ -160,7 +161,7 @@ end
 end
 
 % ------------------------------------------------------------------
-function out = localFlatFieldClaheDenoise(chan, background, roiMask, ~)
+function out = localFlatFieldClaheDenoise(chan, background, roiMask, cfg)
 flatField = double(chan) ./ (double(background) + 1);
 normalizer = max(flatField(roiMask));
 if normalizer <= 0 || ~isfinite(normalizer)
@@ -168,17 +169,18 @@ if normalizer <= 0 || ~isfinite(normalizer)
 end
 flatField = min(flatField ./ normalizer, 1);
 flatFieldU8 = im2uint8(flatField);
-claheChan = adapthisteq(flatFieldU8, 'ClipLimit', 0.01, 'NumTiles', [8 8]);
+claheChan = adapthisteq(flatFieldU8, 'ClipLimit', cfg.claheClipLimit, 'NumTiles', cfg.claheNumTiles);
 out = imnlmfilt(claheChan);
 end
 
 % ------------------------------------------------------------------
-function e = localMaskedEntropy(channel01, mask)
-% Shannon entropy (base 2, 256-bin histogram), restricted to mask==true.
+function e = localMaskedEntropy(channel01, mask, nBins)
+% Shannon entropy (base 2, nBins-bin histogram), restricted to mask==true.
 % The built-in entropy() function has no mask input, so this reimplements
 % its histogram/entropy math narrowly over just the ROI pixels.
+if nargin < 3 || isempty(nBins), nBins = 256; end
 vals = channel01(mask);
-counts = histcounts(vals, 256, 'BinLimits', [0 1]);
+counts = histcounts(vals, nBins, 'BinLimits', [0 1]);
 p = counts / sum(counts);
 p = p(p > 0);
 e = -sum(p .* log2(p));
