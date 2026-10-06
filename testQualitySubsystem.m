@@ -103,6 +103,17 @@ img = localFundus(128,128,45,1.0,0);
 [isG, eRGB, eGray, fs, es, roi] = assessAndEnhanceImage(img, 8, 3.5);
 assert(islogical(isG) && ndims(eRGB)==3 && ismatrix(eGray) && islogical(roi), '6-output contract broken');
 assert(isequal(size(eGray), size(roi)), 'enhancedGray/roiMask size mismatch breaks runSegmentationNet');
+% RGBA input: first 3 channels kept, no crash
+rgba = cat(3, img, uint8(255*ones(128,128)));
+[isG4, ~, ~, ~, ~, ~] = assessAndEnhanceImage(rgba, 8, 3.5);
+assert(islogical(isG4), 'RGBA handling broken');
+% Empty input: clean error, not obscure crash
+try
+    assessAndEnhanceImage(uint8([]), 8, 3.5);
+    error('expected:emptyShouldError', 'empty input did not error');
+catch E
+    assert(strcmp(E.identifier,'assessAndEnhanceImage:badInput'), sprintf('wrong error: %s', E.identifier));
+end
 end
 
 function img = localFundus(H, W, R, bright, dx)

@@ -82,9 +82,20 @@ if nargin < 2 || isempty(focusThresh)
     focusThresh = cfg0.focusThresh; % see the calibration note above and in the header comment
 end
 
-% --- 0. Normalize to RGB up front so every line after this can assume
-%        3 channels; removes the old dead grayscale-handling branches
-%        that rgb2hsv would have crashed straight through anyway. ---
+% --- 0. Validate + normalize to RGB up front so every line after this
+%        can assume HxWx3 uint8; removes the old dead grayscale-handling
+%        branches that rgb2hsv would have crashed straight through anyway. ---
+if isempty(rawImage) || ~isnumeric(rawImage) && ~islogical(rawImage)
+    error('assessAndEnhanceImage:badInput', 'rawImage must be a non-empty numeric/logical image.');
+end
+if ndims(rawImage) ~= 2 && ndims(rawImage) ~= 3
+    error('assessAndEnhanceImage:badInput', 'rawImage must be HxW or HxWxC.');
+end
+if size(rawImage,3) > 3
+    warning('assessAndEnhanceImage:extraChannels', ...
+        'Got %d channels; keeping first 3 (RGB) and ignoring alpha/depth extras.', size(rawImage,3));
+    rawImage = rawImage(:,:,1:3);
+end
 if size(rawImage,3) == 1
     rawImage = repmat(rawImage, [1 1 3]);
 end
