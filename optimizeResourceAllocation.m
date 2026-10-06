@@ -35,7 +35,15 @@ function results = optimizeResourceAllocation(annualPatients, referableFraction,
 %
 % OUTPUT:
 %   results - struct with fields .reviewersNeeded_30s, .reviewersNeeded_120s,
-%             .table (reviewer count -> wait time, both scenarios)
+%             .table (reviewer count -> wait time, both scenarios),
+%             .objective (explicit objective statement),
+%             table rows additionally carry .utilization (offered load /
+%             servers; >=1 means unstable) and .stability ('stable' only
+%             when utilization < 1 AND wait is finite).
+%
+% OBJECTIVE (explicit): minimize reviewer count c subject to
+%   Erlang-C mean review wait <= targetWaitMinutes AND utilization < 1.
+% No hidden weighted score: the first c meeting both constraints wins.
 %
 % Requires: nothing beyond base MATLAB for the analytical part. The
 % optional SimEvents cross-check at the bottom needs Simulink/SimEvents
@@ -55,7 +63,8 @@ scenarios = struct('label', {'Optimistic (30s/review, per the pitch claim)', 'Co
                     'muPerHour', {3600/30, 3600/120});
 
 results = struct();
-results.table = struct('scenario', {}, 'reviewers', {}, 'waitMinutes', {});
+results.objective = sprintf('minimize reviewers c s.t. Erlang-C wait <= %.0f min AND utilization < 1', targetWaitMinutes);
+results.table = struct('scenario', {}, 'reviewers', {}, 'waitMinutes', {}, 'utilization', {}, 'stability', {});
 
 for s = 1:numel(scenarios)
     fprintf('\n--- %s ---\n', scenarios(s).label);
@@ -64,13 +73,25 @@ for s = 1:numel(scenarios)
     for c = 1:maxReviewersToTry
         wq = erlangCWaitHours(lambdaReferablePerHour, scenarios(s).muPerHour, c);
         wqMinutes = wq * 60;
-        if isnan(neededReviewers) && isfinite(wqMinutes) && wqMinutes <= targetWaitMinutes
+        rho = (lambdaReferablePerHour / scenarios(s).muPerHour) / c;
+        stable = isfinite(wqMinutes) && rho < 1;
+        if isnan(neededReviewers) && stable && wqMinutes <= targetWaitMinutes
             neededReviewers = c;
-            fprintf('  %d reviewer(s): average wait = %.2f minutes  <- meets the %g-minute target\n', c, wqMinutes, targetWaitMinutes);
+            fprintf('  %d reviewer(s): average wait = %.2f minutes (rho=%.2f)  <- meets the %g-minute target\n', c, wqMinutes, rho, targetWaitMinutes);
         elseif c <= 10 || c == neededReviewers + 1 % keep the printed table short; always show the first ~10 and the one right after the answer
-            fprintf('  %d reviewer(s): average wait = %.2f minutes\n', c, wqMinutes);
+            if stable
+                fprintf('  %d reviewer(s): average wait = %.2f minutes (rho=%.2f)\n', c, wqMinutes, rho);
+            else
+                fprintf('  %d reviewer(s): UNSTABLE (rho=%.2f) - queue never stabilizes, wait is Inf\n', c, rho);
+            end
         end
-        results.table(end+1) = struct('scenario', scenarios(s).label, 'reviewers', c, 'waitMinutes', wqMinutes); %#ok<AGROW>
+        if stable
+            stab = 'stable';
+        else
+            stab = 'UNSTABLE';
+        end
+        results.table(end+1) = struct('scenario', scenarios(s).label, 'reviewers', c, 'waitMinutes', wqMinutes, ...
+            'utilization', rho, 'stability', stab); %#ok<AGROW>
     end
     if s == 1
         results.reviewersNeeded_30s = neededReviewers;
@@ -92,6 +113,9 @@ fprintf(['\nRESOURCE ALLOCATION ANSWER: for %d patients/year at %.0f%% referable
          'program needs %s if the automated report holds review time near the ' ...
          'pitch''s 30-second target, or %s if review realistically takes closer to 2 minutes.\n'], ...
         annualPatients, referableFraction*100, reviewersMsg30, reviewersMsg120);
+fprintf(['Sensitivity note: the 30s-vs-120s pair above IS the sensitivity analysis - review ' ...
+         'speed dominates the answer far more than headcount does. All numbers assume the SCENARIO ' ...
+         'arrival rate and referable fraction; re-run with measured field values before staffing.\n']);
 
 % --- Optional: cross-check the BANDWIDTH QUEUE side (not reviewer count)
 % with the actual discrete-event SimEvents model, sweeping arrival rate
@@ -124,21 +148,8 @@ end
 end
 
 % ------------------------------------------------------------------
-function wq = erlangCWaitHours(lambda, mu, c)
-% M/M/c Erlang-C average wait time in queue, same units as 1/mu (hours,
-% if mu is per-hour). Verified against the closed-form M/M/1 result at
-% c=1 before use (matched to 1e-9).
-a = lambda / mu; % offered load, erlangs
-rho = a / c;
-if rho >= 1
-    wq = Inf; % unstable - queue grows without bound at this staffing level
-    return;
-end
-sumTerms = 0;
-for k = 0:(c-1)
-    sumTerms = sumTerms + (a^k)/factorial(k);
-end
-lastTerm = (a^c)/factorial(c) * (c/(c-a));
-pWait = lastTerm / (sumTerms + lastTerm);
-wq = pWait / (c*mu - lambda);
-end
+% NOTE: the M/M/c formula used to live here as a file-local duplicate of
+% erlangCWaitHours.m. MATLAB resolves file-local functions first, so the
+% optimizer was silently using the untested copy while runSelfTests.m
+% guarded the standalone file. The duplicate is deleted: the sweep below
+% calls the single tested erlangCWaitHours.m directly.
