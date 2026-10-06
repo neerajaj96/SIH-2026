@@ -99,9 +99,12 @@ for i = 1:numel(maskFolders)
         if frac > 0.60,   nFull  = nFull + 1; end
     end
     % Value-range classification from the union of sampled unique values.
+    % Strict: 0-255 ONLY if every sampled value is in {0,1,255}. A source
+    % with intermediate levels (e.g. 128 from JPEG/antialiasing or
+    % DIARETDB1 confidence markings) is 'other' -> CHECK THIS, never PASS.
     if max(allVals) <= 1
         valueRange = '0-1';
-    elseif all(ismember(allVals, [0 1 255])) || (min(allVals) == 0 && max(allVals) == 255)
+    elseif all(ismember(allVals, [0 1 255]))
         valueRange = '0-255';
     else
         valueRange = 'other';
