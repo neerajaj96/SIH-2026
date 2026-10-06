@@ -1,0 +1,40 @@
+name: python-contracts
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  stdlib-contracts:
+    name: Python contract suites (gating)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run stdlib suites (no third-party deps required)
+        run: |
+          for t in tests/test_stage9_security.py tests/test_stage8_telemed.py \
+                   tests/test_stage7_bridge.py tests/test_stage4_clinical.py \
+                   tests/test_stages123_hardening.py tests/test_stage12_contract.py \
+                   tests/test_stage10_e2e.py tests/python/test_quality_mirror.py; do
+            python3 "$t" || exit 1
+          done
+          # grading/seg mirrors need their manual runners (pytest-style fns
+          # without pytest installed); covered by test_stage10 evidence docs.
+
+  matlab-runtime:
+    name: MATLAB runtime (UNEXECUTED, non-gating)
+    runs-on: ubuntu-latest
+    if: false  # enable only on a self-hosted runner with MATLAB + toolboxes
+    steps:
+      - run: echo "MATLAB-gated: requires self-hosted MATLAB runner"
+
+  deployment-verify:
+    name: Deployment verification (UNEXECUTED, non-gating)
+    runs-on: ubuntu-latest
+    if: false  # enable only with an exercised staging topology
+    steps:
+      - run: echo "DEPLOYMENT-GATED: requires staging frontend + MATLAB host"
