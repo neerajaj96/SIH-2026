@@ -85,10 +85,11 @@ documented but couldn't find.
   `production_schema.sql` for the real migration target.
 
 ## What's actually solid
-Worth saying out loud, not just the gaps: the quality gate, enhancement
-pipeline, all three trained-network *architectures*, the ordinal-aware
+Worth saying out loud, not just the gaps: the quality gate math + config
+(`runSelfTests.m` numeric checks; full image suite in `testQualitySubsystem.m`
++ Python mirror 20/20 here — run both in MATLAB before clinical claims),
+all three trained-network *architectures*, the ordinal-aware
 loss, the temperature-scaling math, the ICDR 4-2-1 rule engine's logic,
 QWK, Wilson intervals, Erlang-C staffing math, and the patient-level
-split leakage guard are all independently tested — `runSelfTests.m`
-reruns every one of these checks in MATLAB. The gap is real data and
+split leakage guard are all independently tested. The gap is real data and
 real training time, not unverified logic.
