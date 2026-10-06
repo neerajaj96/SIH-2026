@@ -65,20 +65,13 @@
 scriptDir = fileparts(mfilename('fullpath'));
 imagePath = fullfile(scriptDir, 'sample.jpg');
 
-% Temperature: load a real calibrated value if one exists, otherwise fall
-% back to the old placeholder - LOUDLY labeled either way, in the report
-% itself, not just in a comment. See calibrateTemperature.m.
-temperatureCalFile = fullfile(scriptDir, 'calibrated_temperature.mat');
-if exist(temperatureCalFile, 'file')
-    S = load(temperatureCalFile, 'temperatureT', 'calibrationReport');
-    temperatureT = S.temperatureT;
-    haveCalibratedTemperature = true;
-    fprintf('Loaded calibrated temperature T=%.3f (validation ECE %.4f -> %.4f). See calibrated_temperature.mat.\n', ...
-        temperatureT, S.calibrationReport.eceBefore, S.calibrationReport.eceAfter);
-else
-    temperatureT = 1.5; % UNCALIBRATED PLACEHOLDER - run calibrateTemperature.m on held-out validation logits/labels once the grader is trained
-    haveCalibratedTemperature = false;
-end
+% NOTE: temperature is NOT loaded here either. The applied T comes back
+% in r (r.temperatureT / r.temperatureCalibrated, resolved by the model
+% cache from the same pwd-convention artifact softmax actually used), so
+% displayed T can never differ from applied T. A separate scriptDir load
+% here previously risked showing one file while softmax used another.
+scriptDir = fileparts(mfilename('fullpath'));
+imagePath = fullfile(scriptDir, 'sample.jpg');
 
 haveTrainedModels = exist('unet_Vessels.mat','file') && ...
                      exist('unet_MicroaneurysmsHemorrhages.mat','file') && ...
@@ -132,6 +125,11 @@ odCenter = r.odCenter; odRadius = r.odRadius; foveaCenter = r.foveaCenter; quadr
 nvFlagged = r.nvFlagged; nvTortuosity = r.nvTortuosity; nvDensity = r.nvDensity;
 clinicalGrade = r.ruleGrade; clinicalEvidence = r.evidence;
 haveTrainedModels = r.haveTrainedModels;
+% Applied temperature: the SAME value softmax divided by (reported by the
+% pipeline, hot-reloaded by the model cache). Displayed T below is this
+% value - never a second independent file read.
+temperatureT = r.temperatureT;
+haveCalibratedTemperature = r.temperatureCalibrated;
 
 classNames = ["No DR","Mild NPDR","Moderate NPDR","Severe NPDR","Proliferative DR"];
 if haveTrainedModels

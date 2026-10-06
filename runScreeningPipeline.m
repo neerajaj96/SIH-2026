@@ -40,6 +40,9 @@ function r = runScreeningPipeline(rawImage, models)
 %                                   even in simulated mode - see assignClinicalGrade.m)
 %   haveTrainedModels
 %   dlGrade, confidence, scoreMap, gradCamOnDisc  - NaN/empty if simulated
+%   temperatureT, temperatureCalibrated, temperatureSource - the APPLIED
+%     softmax temperature (from the model cache, hot-reloaded on artifact
+%     mtime); NaN/false when simulated (no confidence computed)
 %
 % Requires: same toolboxes as production_inference.m.
 
@@ -51,7 +54,8 @@ r = struct('status','ok','errorMessage','', 'focus',NaN,'entropy',NaN,'roiPassed
     'odCenter',[],'odRadius',NaN,'foveaCenter',[],'quadrantMask',[], ...
     'nvFlagged',false,'nvTortuosity',NaN,'nvDensity',NaN, ...
     'ruleGrade',NaN,'evidence',{{}}, 'haveTrainedModels',false, ...
-    'dlGrade',NaN,'confidence',NaN,'scoreMap',[],'gradCamOnDisc',false);
+    'dlGrade',NaN,'confidence',NaN,'scoreMap',[],'gradCamOnDisc',false, ...
+    'temperatureT',NaN,'temperatureCalibrated',false,'temperatureSource','simulated (no trained models)');
 
 if nargin < 2 || isempty(models)
     models = getOrLoadCachedModels();
@@ -126,6 +130,14 @@ try
         % loud validation on NaN/Inf, size mismatch, fractional masks.
         fusionTensor = buildGradingFusionTensor(enhancedRGB, vesselMask, maheMask, exudateMask);
         dlX = dlarray(fusionTensor, 'SSC');
+        % Applied temperature comes from the model cache (hot-reloaded on
+        % artifact mtime by getOrLoadCachedModels) and is reported back so
+        % display can never show a different T than softmax used.
+        % Calibrated-ness = artifact presence in the model dir (same pwd
+        % convention as loadModelsIfPresent); a fitted T==1.5 still counts.
+        r.temperatureT = models.temperatureT;
+        r.temperatureCalibrated = isfile('calibrated_temperature.mat');
+        r.temperatureSource = 'model cache (getOrLoadCachedModels, hot-reloaded)';
         logits = predict(models.drNet, dlX, Outputs="dr_fc");
         probs = extractdata(softmax(logits ./ models.temperatureT));
         [conf, idx] = max(probs);
