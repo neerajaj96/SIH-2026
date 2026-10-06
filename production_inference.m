@@ -57,13 +57,13 @@
 % =========================================================================
 
 % --- 0. Config ---
+% NOTE: quality thresholds are NOT loaded here. The gate inside
+% runScreeningPipeline.m resolves calibration (pwd convention) and reports
+% the effective values back in r - display below reads r, so gate and
+% report can never disagree. A second independent load here previously
+% used scriptDir while the gate used pwd (two .mat files could disagree).
 scriptDir = fileparts(mfilename('fullpath'));
 imagePath = fullfile(scriptDir, 'sample.jpg');
-qcfg = qualityConfig();
-[focusThresh, entropyThresh, qCalib] = qualityLoadCalibration(qcfg, scriptDir);
-if ~qCalib.isCalibrated
-    fprintf('Quality gate using canonical thresholds focus=%.2f entropy=%.2f (UNCALIBRATED - run calibrateQualityThresholds.m).\n', focusThresh, entropyThresh);
-end
 
 % Temperature: load a real calibrated value if one exists, otherwise fall
 % back to the old placeholder - LOUDLY labeled either way, in the report
@@ -113,11 +113,15 @@ end
 rawImage = imread(imagePath);
 r = runScreeningPipeline(rawImage);
 
+% Single source: effective gate thresholds come from the pipeline report
+% itself (which resolved calibration), never from a second independent
+% load that could disagree with the gate.
 focus = r.focus; ent = r.entropy;
+focusThresh = r.focusThresh; entropyThresh = r.entropyThresh;
 if strcmp(r.status, 'ungradeable')
-    error(['Image rejected by quality check (focus=%.1f < %.1f, or entropy=%.2f < %.2f). ' ...
+    error(['Image rejected by quality check (decision=%s, focus=%.1f < %.1f, or entropy=%.2f < %.2f). ' ...
            'Recapture required, or recalibrate thresholds with calibrateQualityThresholds.m.'], ...
-           focus, focusThresh, ent, entropyThresh);
+           r.qualityDecision, focus, focusThresh, ent, entropyThresh);
 elseif strcmp(r.status, 'error')
     error('runScreeningPipeline:failed', 'Pipeline error: %s', r.errorMessage);
 end
@@ -212,8 +216,8 @@ if haveReportGen
         else
             add(rpt, Paragraph('Deep-learning grade: SIMULATED (no trained model found) - not a real prediction.'));
         end
-        add(rpt, Paragraph(sprintf('Quality gate: focus=%.1f (threshold %.1f), entropy=%.2f (threshold %.2f) - PASSED', ...
-            focus, focusThresh, ent, entropyThresh)));
+        add(rpt, Paragraph(sprintf('Quality gate: %s - focus=%.1f (threshold %.1f), entropy=%.2f (threshold %.2f)%s', ...
+            r.qualityDecision, focus, focusThresh, ent, entropyThresh, ternary(r.qualityCalibrated, '', ' - UNCALIBRATED PLACEHOLDER, see calibrateQualityThresholds.m'))));
 
         add(rpt, Chapter('Title', 'Rule-Based Clinical Grade (ICDR 4-2-1 criteria)'));
         add(rpt, Paragraph(sprintf('Clinical-criteria grade: Level %d (%s)', clinicalGrade, classNames(clinicalGrade+1))));
@@ -272,8 +276,8 @@ if ~reportProducedAsPdf
     else
         fprintf(fid, 'Deep-learning grade: SIMULATED (no trained model found) - not a real prediction.\n');
     end
-    fprintf(fid, 'Quality gate: focus=%.1f (threshold %.1f), entropy=%.2f (threshold %.2f) - PASSED\n\n', ...
-        focus, focusThresh, ent, entropyThresh);
+    fprintf(fid, 'Quality gate: %s - focus=%.1f (threshold %.1f), entropy=%.2f (threshold %.2f)%s\n\n', ...
+        r.qualityDecision, focus, focusThresh, ent, entropyThresh, ternary(r.qualityCalibrated, '', ' - UNCALIBRATED PLACEHOLDER, see calibrateQualityThresholds.m'));
 
     fprintf(fid, '-- RULE-BASED CLINICAL GRADE (ICDR 4-2-1 criteria) --\n');
     fprintf(fid, 'Clinical-criteria grade: Level %d (%s)\n', clinicalGrade, classNames(clinicalGrade+1));

@@ -15,8 +15,11 @@ function result = screenOneImage(imagePath, models)
 %               through to runScreeningPipeline.m
 %
 % OUTPUT: result - struct with dl, conf, rule, evidence, nv,
-%   gradCamOnDisc, status, errorMessage, focus, entropy, roiPassed -
-%   unchanged shape from before, so bridge_server.py needs no changes.
+%   gradCamOnDisc, status, errorMessage, focus, entropy, roiPassed, PLUS
+%   additive quality fields (qualityDecision, qualityReasons,
+%   qualityGuidance, focusThresh, entropyThresh, qualityCalibrated).
+%   Additive only: bridge_server.py picks known keys and ignores the rest,
+%   so old bridge versions keep working.
 %
 % Requires: same toolboxes as runScreeningPipeline.m.
 
@@ -29,6 +32,9 @@ r = runScreeningPipeline(rawImage, models);
 
 result = struct('status', r.status, 'errorMessage', r.errorMessage, ...
     'focus', r.focus, 'entropy', r.entropy, 'roiPassed', r.roiPassed, ...
+    'qualityDecision', r.qualityDecision, 'qualityReasons', {r.qualityReasons}, ...
+    'qualityGuidance', {r.qualityGuidance}, 'focusThresh', r.focusThresh, ...
+    'entropyThresh', r.entropyThresh, 'qualityCalibrated', r.qualityCalibrated, ...
     'dl', r.dlGrade, 'conf', r.confidence, 'rule', r.ruleGrade, ...
     'evidence', {r.evidence}, 'nv', r.nvFlagged, 'gradCamOnDisc', r.gradCamOnDisc);
 end

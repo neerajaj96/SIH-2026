@@ -26,7 +26,12 @@ function r = runScreeningPipeline(rawImage, models)
 %
 % OUTPUT: r - struct with fields:
 %   status, errorMessage          - 'ok' | 'ungradeable' | 'error'
-%   focus, entropy, roiPassed     - quality gate
+%   focus, entropy, roiPassed     - quality gate (roiPassed=false on FAIL)
+%   qualityDecision               - 'PASS' | 'BORDERLINE' | 'FAIL' (never
+%                                   silently coerced; BORDERLINE stays visible)
+%   qualityReasons, qualityGuidance - cellstr from assessFundusQuality
+%   focusThresh, entropyThresh     - EFFECTIVE thresholds used by the gate
+%   qualityCalibrated, qualityCalibSource - calibration traceability
 %   enhancedRGB, enhancedGray, roiMask
 %   vesselMask, maheMask, exudateMask, lesionMask
 %   odCenter, odRadius, foveaCenter, quadrantMask
@@ -39,6 +44,8 @@ function r = runScreeningPipeline(rawImage, models)
 % Requires: same toolboxes as production_inference.m.
 
 r = struct('status','ok','errorMessage','', 'focus',NaN,'entropy',NaN,'roiPassed',false, ...
+    'qualityDecision','FAIL','qualityReasons',{{}},'qualityGuidance',{{}}, ...
+    'focusThresh',NaN,'entropyThresh',NaN,'qualityCalibrated',false,'qualityCalibSource','', ...
     'enhancedRGB',[],'enhancedGray',[],'roiMask',[], ...
     'vesselMask',[],'maheMask',[],'exudateMask',[],'lesionMask',[], ...
     'odCenter',[],'odRadius',NaN,'foveaCenter',[],'quadrantMask',[], ...
@@ -52,16 +59,23 @@ end
 r.haveTrainedModels = models.haveTrainedModels;
 
 try
-    qcfg = qualityConfig();
-    % Honor calibrated qualityThresholds.mat when present (pwd convention,
-    % same as loadModelsIfPresent.m); falls back to canonical 8/3.5 with
-    % no behavior change when absent. Previously the gate ignored
-    % calibration while production_inference.m displayed calibrated values.
-    [qFocusThresh, qEntropyThresh] = qualityLoadCalibration(qcfg);
-    [isGradeable, enhancedRGB, enhancedGray, focus, ent, roiMask] = assessAndEnhanceImage(rawImage, qFocusThresh, qEntropyThresh);
-    r.focus = focus; r.entropy = ent; r.roiPassed = isGradeable;
-    r.enhancedRGB = enhancedRGB; r.enhancedGray = enhancedGray; r.roiMask = roiMask;
-    if ~isGradeable
+    % Canonical quality call (single core compute): calibration resolved
+    % inside via pwd convention (same as loadModelsIfPresent.m); the
+    % EFFECTIVE thresholds are reported back and reused for display, so
+    % the gate and reporting can never disagree. FAIL hard-rejects;
+    % BORDERLINE proceeds as gradeable-with-warning (decision + reasons
+    % preserved, never coerced to PASS).
+    qrep = assessFundusQuality(rawImage);
+    r.focus = qrep.focusScore; r.entropy = qrep.entropyScore;
+    r.roiPassed = qrep.isGradeable;
+    r.qualityDecision = qrep.decision;
+    r.qualityReasons = qrep.reasons;
+    r.qualityGuidance = qrep.recaptureGuidance;
+    r.focusThresh = qrep.focusThresh; r.entropyThresh = qrep.entropyThresh;
+    r.qualityCalibrated = qrep.isCalibrated; r.qualityCalibSource = qrep.calibrationSource;
+    r.enhancedRGB = qrep.enhancedRGB; r.enhancedGray = qrep.enhancedGray; r.roiMask = qrep.roiMask;
+    enhancedRGB = qrep.enhancedRGB; enhancedGray = qrep.enhancedGray; roiMask = qrep.roiMask;
+    if ~qrep.isGradeable
         r.status = 'ungradeable';
         return;
     end
@@ -107,11 +121,10 @@ try
     r.ruleGrade = ruleGrade; r.evidence = evidence;
 
     if r.haveTrainedModels
-        % Stage-2 fix: masks are categorical - nearest-neighbor only.
-        % The previous default (bicubic) invented fractional 0-255 values
-        % the grader never saw as binary. Photos stay bilinear.
-        fusionTensor = single(cat(3, imresize(enhancedRGB, [224 224], 'bilinear'), ...
-            imresize(uint8(vesselMask)*255, [224 224], 'nearest'), imresize(uint8(lesionMask)*255, [224 224], 'nearest')));
+        % Single canonical fusion implementation (same builder training
+        % uses): photos bilinear, masks nearest, lesion = mahe|exudate,
+        % loud validation on NaN/Inf, size mismatch, fractional masks.
+        fusionTensor = buildGradingFusionTensor(enhancedRGB, vesselMask, maheMask, exudateMask);
         dlX = dlarray(fusionTensor, 'SSC');
         logits = predict(models.drNet, dlX, Outputs="dr_fc");
         probs = extractdata(softmax(logits ./ models.temperatureT));

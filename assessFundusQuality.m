@@ -1,7 +1,10 @@
 function report = assessFundusQuality(rawImage, varargin)
-% assessFundusQuality: CANONICAL Stage-1 quality API (struct output).
-% assessAndEnhanceImage.m remains as the backward-compatible 6-output
-% wrapper (delegating here since v1.2) - new code should call THIS.
+% assessFundusQuality: CANONICAL Stage-1 quality API (struct output) and
+% SINGLE implementation of the ROI / focus / entropy / enhancement core.
+% assessAndEnhanceImage.m is a thin backward-compatible 6-output wrapper
+% delegating here (legacy boolean = threshold-only comparison; extended
+% FAIL reasons such as degenerate coverage live in report.decision).
+% New code must call THIS.
 %
 % DECISION: PASS | BORDERLINE | FAIL
 %   FAIL      - below focusThresh or entropyThresh, or ROI degenerate,
@@ -9,18 +12,31 @@ function report = assessFundusQuality(rawImage, varargin)
 %   BORDERLINE- above thresholds but within configured margins, or mild
 %               exposure/contrast warnings. Gradeable-with-warning: Stage 2
 %               may proceed but must log warnings; curators should review.
+%               NEVER silently coerce to PASS - report.decision stays
+%               'BORDERLINE' and report.reasons is non-empty.
 %   PASS      - above thresholds + margins, no severe flags.
 %
 % USAGE:
 %   rep = assessFundusQuality(img);
 %   rep = assessFundusQuality(img, 'FocusThresh', 9, 'EntropyThresh', 3.8);
-%   rep = assessFundusQuality(img, 'Config', qualityConfig());
+%   rep = assessFundusQuality(img, 'Config', qualityConfig(), 'CalibrationDir', pwd);
+%   rep = assessFundusQuality(img, 'FocusThresh', -Inf, 'EntropyThresh', -Inf, ...
+%             'CalibrationDir', []);  % enhance-only, never rejects
+%
+% CalibrationDir: folder searched for qualityThresholds.mat ([] = skip
+%   calibration entirely and use canonical/explicit thresholds; the legacy
+%   wrapper passes [] so explicit caller thresholds are never overridden).
+%   Explicit FocusThresh/EntropyThresh always win over the .mat file.
+%   BORDERLINE margins are derived from the EFFECTIVE thresholds.
 %
 % OUTPUT report struct fields:
-%   decision, isGradeable, reasons{}, recaptureGuidance{}
-%   focusScore, entropyScore, focusThresh, entropyThresh
+%   decision, isGradeable (= decision ~= 'FAIL'), legacyGradeable
+%     (pure focus>=ft && entropy>=et comparison, exactly what the legacy
+%     wrapper returns), reasons{}, recaptureGuidance{}
+%   focusScore, entropyScore, focusThresh, entropyThresh (effective)
 %   scores struct (illumination, exposure, contrast, artefact, coverage...)
-%   enhancedRGB, enhancedGray, roiMask, roiInfo struct
+%   enhancedRGB (HxWx3 uint8, bg=0), enhancedGray (HxW uint8, bg=0),
+%   roiMask (HxW logical), roiInfo struct
 %   configVersion, isCalibrated, calibrationSource
 %
 % Requires: Image Processing Toolbox. Deterministic (no rng).
@@ -29,36 +45,115 @@ p = inputParser;
 addParameter(p, 'FocusThresh', [], @(x) isempty(x) || (isnumeric(x) && isscalar(x)));
 addParameter(p, 'EntropyThresh', [], @(x) isempty(x) || (isnumeric(x) && isscalar(x)));
 addParameter(p, 'Config', qualityConfig(), @isstruct);
-addParameter(p, 'CalibrationDir', pwd, @ischar);
+addParameter(p, 'CalibrationDir', pwd, @(x) isempty(x) || ischar(x));
 parse(p, varargin{:});
 cfg = p.Results.Config;
 if isempty(cfg), cfg = qualityConfig(); end
 
-[focusThresh, entropyThresh, calibInfo] = qualityLoadCalibration(cfg, p.Results.CalibrationDir);
+if isempty(p.Results.CalibrationDir)
+    focusThresh = cfg.focusThresh; entropyThresh = cfg.entropyThresh;
+    calibInfo = struct('isCalibrated', false, 'source', 'explicit caller thresholds (calibration bypassed)', 'note', 'legacy-explicit');
+else
+    [focusThresh, entropyThresh, calibInfo] = qualityLoadCalibration(cfg, p.Results.CalibrationDir);
+end
 if ~isempty(p.Results.FocusThresh), focusThresh = p.Results.FocusThresh; end
 if ~isempty(p.Results.EntropyThresh), entropyThresh = p.Results.EntropyThresh; end
 
 t0 = cputime;
-[isGradeableBase, enhancedRGB, enhancedGray, focusScore, entropyScore, roiMask] = ...
-    assessAndEnhanceImage(rawImage, focusThresh, entropyThresh);
 
-% --- Extended metrics from raw + roi (all ROI-masked, resolution-normalized) ---
+% --- 0. Validate + normalize (identical to legacy core) ---
+if isempty(rawImage) || ~isnumeric(rawImage) && ~islogical(rawImage)
+    error('assessFundusQuality:badInput', 'rawImage must be a non-empty numeric/logical image.');
+end
+if ndims(rawImage) ~= 2 && ndims(rawImage) ~= 3
+    error('assessFundusQuality:badInput', 'rawImage must be HxW or HxWxC.');
+end
+if size(rawImage,3) > 3
+    warning('assessFundusQuality:extraChannels', ...
+        'Got %d channels; keeping first 3 (RGB) and ignoring alpha/depth extras.', size(rawImage,3));
+    rawImage = rawImage(:,:,1:3);
+end
 if size(rawImage,3) == 1
-    rgbU8 = repmat(im2uint8(rawImage), [1 1 3]);
-else
-    rgbU8 = im2uint8(rawImage);
+    rawImage = repmat(rawImage, [1 1 3]);
 end
-hsv = rgb2hsv(rgbU8);
-V = hsv(:,:,3);
+rawImage = im2uint8(rawImage);
+
+% --- 1. Fundus-circle ROI (single implementation) ---
+grayFull = rgb2gray(rawImage);
+roiMask = grayFull > cfg.roiSeedThresh;
+roiMask = imfill(roiMask, 'holes');
+cc = bwconncomp(roiMask);
+if cc.NumObjects > 1
+    % Largest component wins: dust specks, sticker tags, and light-leak
+    % corners are orders of magnitude smaller than the fundus disc.
+    sizes = cellfun(@numel, cc.PixelIdxList);
+    [~, biggest] = max(sizes);
+    roiMask = false(size(roiMask));
+    roiMask(cc.PixelIdxList{biggest}) = true;
+end
+% Edge-shave scales with resolution: floor preserves validated 1280px
+% behaviour, large IDRiD frames get proportionally more.
+roiDiaEst = sqrt(4 * nnz(roiMask) / pi);
+erodeR = max(cfg.roiErodeDisk, round(cfg.roiErodeRelFrac * roiDiaEst));
+roiMask = imerode(roiMask, strel('disk', erodeR));
+if ~any(roiMask(:))
+    roiMask = true(size(grayFull)); % degenerate input - fall back rather than crash
+end
+
+% --- 2. Quality scores, restricted to the ROI ---
+laplacianFilter = fspecial('laplacian', cfg.laplacianAlpha);
+laplacianImage = imfilter(double(grayFull), laplacianFilter, 'replicate');
+focusScore = var(laplacianImage(roiMask));
+
+hsvImage = rgb2hsv(rawImage);
+vChannel = hsvImage(:,:,3);
+entropyScore = localMaskedEntropy(vChannel, roiMask, cfg.entropyBins);
+
+legacyGradeable = (focusScore >= focusThresh) && (entropyScore >= entropyThresh);
+
+% --- 3. Adaptive enhancement (single implementation) ---
+roiDiameter = sqrt(4 * nnz(roiMask) / pi);
+bgRadius = max(round(cfg.bgFraction * roiDiameter), cfg.bgFloorPx);
+structuringElement = strel('disk', bgRadius);
+
+% Guardrail: probe gray ROI contrast BEFORE CLAHE. Flat (noisy/low-light)
+% images get halved ClipLimit so CLAHE does not turn sensor noise into
+% phantom texture; tiny thumbnails skip non-local-means denoise which
+% would erase 1-2px vessels. Normal images take the standard path.
+grayROI = double(grayFull(roiMask)) / 255;
+flatContrast = prctile(grayROI, 95) - prctile(grayROI, 5);
+cfgEnh = cfg;
+if flatContrast < cfg.enhanceFlatThresh
+    cfgEnh.claheClipLimit = cfg.enhanceFlatClip;
+end
+cfgEnh.doDenoise = roiDiameter >= cfg.denoiseMinDiameter;
+
+greenChannel = rawImage(:,:,2);
+greenBackground = imopen(greenChannel, structuringElement);
+% Divide-based flat-fielding (not subtraction): division rescales dim
+% periphery instead of crushing it to black.
+enhancedGray = localFlatFieldClaheDenoise(greenChannel, greenBackground, roiMask, cfgEnh);
+enhancedGray(~roiMask) = 0;
+
+enhancedRGB = rawImage;
+for c = 1:3
+    chan = rawImage(:,:,c);
+    bg = imopen(chan, structuringElement);
+    enhancedRGB(:,:,c) = localFlatFieldClaheDenoise(chan, bg, roiMask, cfgEnh);
+end
+for c = 1:3
+    chanMasked = enhancedRGB(:,:,c);
+    chanMasked(~roiMask) = 0;
+    enhancedRGB(:,:,c) = chanMasked;
+end
+
+% --- 4. Extended metrics (ROI-masked, resolution-normalized) ---
+V = vChannel;
 roi = roiMask;
-if ~any(roi(:))
-    roi = true(size(V));
-end
 roiVals = double(V(roi));
 framePx = numel(roi);
 
 coverageFrac = nnz(roi) / framePx;
-% Circularity 4*pi*A/P^2 on largest-component boundary
 perimMask = bwperim(roi);
 perimPx = nnz(perimMask);
 if perimPx > 0
@@ -67,7 +162,6 @@ if perimPx > 0
 else
     circularity = 0;
 end
-roiDiameter = sqrt(4 * nnz(roi) / pi);
 
 illumMedian = median(roiVals);
 illumP5  = prctile(roiVals, cfg.illumLowPctl);
@@ -84,7 +178,7 @@ scores = struct('illuminationMedian', illumMedian, 'illuminationP5', illumP5, ..
     'circularity', circularity, 'roiDiameterPx', roiDiameter, ...
     'focusScore', focusScore, 'entropyScore', entropyScore);
 
-% --- Decision with reasons + guidance ---
+% --- 5. Decision with reasons + guidance (margins from EFFECTIVE thresholds) ---
 reasons = {};
 guidance = {};
 
@@ -130,7 +224,7 @@ if contrastP95P5 < 0.25
     guidance{end+1} = 'Recapture with better focus/flash; enhancement cannot invent missing contrast.';
 end
 
-hardFail = ~isGradeableBase || coverageFrac < cfg.roiMinCoverageFrac || underexpFrac > 0.25 || overexpFrac > 0.15;
+hardFail = ~legacyGradeable || coverageFrac < cfg.roiMinCoverageFrac || underexpFrac > 0.25 || overexpFrac > 0.15;
 isBorderline = ~hardFail && (~isempty(reasons));
 if hardFail
     decision = 'FAIL';
@@ -145,6 +239,7 @@ roiInfo = struct('coverageFrac', coverageFrac, 'circularity', circularity, ...
     'roiDiameterPx', roiDiameter, 'numPixels', nnz(roiMask), 'framePixels', framePx);
 
 report = struct('decision', decision, 'isGradeable', isGradeable, ...
+    'legacyGradeable', legacyGradeable, ...
     'reasons', {reasons}, 'recaptureGuidance', {guidance}, ...
     'focusScore', focusScore, 'entropyScore', entropyScore, ...
     'focusThresh', focusThresh, 'entropyThresh', entropyThresh, ...
@@ -152,4 +247,32 @@ report = struct('decision', decision, 'isGradeable', isGradeable, ...
     'roiMask', roiMask, 'roiInfo', roiInfo, ...
     'configVersion', cfg.version, 'isCalibrated', calibInfo.isCalibrated, ...
     'calibrationSource', calibInfo.source, 'elapsedCpuSec', cputime - t0);
+end
+
+% ------------------------------------------------------------------
+function out = localFlatFieldClaheDenoise(chan, background, roiMask, cfg)
+flatField = double(chan) ./ (double(background) + 1);
+normalizer = max(flatField(roiMask));
+if normalizer <= 0 || ~isfinite(normalizer)
+    normalizer = 1;
+end
+flatField = min(flatField ./ normalizer, 1);
+flatFieldU8 = im2uint8(flatField);
+claheChan = adapthisteq(flatFieldU8, 'ClipLimit', cfg.claheClipLimit, 'NumTiles', cfg.claheNumTiles);
+if isfield(cfg, 'doDenoise') && ~cfg.doDenoise
+    out = claheChan;
+else
+    out = imnlmfilt(claheChan);
+end
+end
+
+% ------------------------------------------------------------------
+function e = localMaskedEntropy(channel01, mask, nBins)
+% Shannon entropy (base 2, nBins-bin histogram), restricted to mask==true.
+if nargin < 3 || isempty(nBins), nBins = 256; end
+vals = channel01(mask);
+counts = histcounts(vals, nBins, 'BinLimits', [0 1]);
+p = counts / sum(counts);
+p = p(p > 0);
+e = -sum(p .* log2(p));
 end
