@@ -14,7 +14,7 @@ MATLAB-first pipeline + web demo + deployment scaffolding:
 - **Inference:** `production_inference.m` (SIMULATED until real `.mat` weights exist), `runScreeningPipeline.m`, `runBatchScreening.m`, `screenOneImage.m`, `saveModelWithMetadata.m`, `getOrLoadCachedModels.m`, `loadModelsIfPresent.m`
 - **Data:** `datasetRegistry.m` (single source of truth), `buildGradingDatasets.m`, `buildMessidorTestSet.m`, `buildPatientLevelSplit.m`
 - **Telemed / capacity:** `buildTelemedModel.m`, `SimEvents_Telemed_Model.m`, `optimizeResourceAllocation.m`, `erlangCWaitHours.m`
-- **Demo + deploy:** `netrasetu.html` (mock-data console), `bridge_server.py` (FastAPI → MATLAB Engine bridge), `production_schema.sql` (Postgres migration target)
+- **Demo + deploy:** `netrasetu.html` (LIVE bridge console with explicit DEMO/OFFLINE modes), `bridge_server.py` (FastAPI → MATLAB Engine bridge, serialized screening, versioned API), `production_schema.sql` (Postgres migration target)
 - **Docs:** `SIH26038_project_handoff.md`, `LIMITATIONS.md`, `SIH2026_Problem_Statement_26038.pdf`, `SIH26038_Idea_Presentation-1.pptx`
 
 See `SIH26038_project_handoff.md` for architecture decisions and `LIMITATIONS.md` for honest gaps.
@@ -22,7 +22,7 @@ See `SIH26038_project_handoff.md` for architecture decisions and `LIMITATIONS.md
 ## Status — validated vs not (from handoff + self-tests)
 
 Solid (tested via `runSelfTests.m`): quality config + calibrator math, loss functions, QWK, 4-2-1 logic (7/7), OD/fovea sanity check, Erlang-C math, patient-level split guard. Full quality image tests: `testQualitySubsystem.m` (MATLAB, run in MATLAB) + `tests/python/test_quality_mirror.py` (20/20 PASS here) — see `QUALITY_CONTRACT.md` for measured-vs-assumed.
-Not yet real: no trained `.mat` weights, no end-to-end MATLAB run with toolboxes, venous beading / IRMA detectors missing, neovascularization is a proxy, `netrasetu.html` on mock data (not wired to `bridge_server.py`), bridge has open CORS + no auth, SimEvents paths need interactive verification.
+Not yet real: no trained `.mat` weights, no end-to-end MATLAB run with toolboxes, venous beading / IRMA detectors missing, neovascularization is a proxy, `netrasetu.html` defaults LIVE against `bridge_server.py` (explicit DEMO fallback; bridge untested live here), bridge has open CORS + no auth (SECURITY-GATED), SimEvents paths need interactive verification. See `STAGE7_NETRASETU_HANDOFF.md`.
 
 ## Quickstart
 

@@ -156,7 +156,12 @@ select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9
     <button data-view="review" role="tab" aria-selected="false">Review queue</button>
     <button data-view="admin" role="tab" aria-selected="false">Capacity</button>
   </div>
-  <div class="demo-badge"><span class="dot"></span>Demo mode — illustrative results</div>
+  <div class="demo-badge" id="modeBadge"><span class="dot"></span><span id="modeBadgeText">Checking bridge…</span></div>
+  <div style="display:flex;gap:8px;align-items:center;margin-top:8px;font-size:12px;color:var(--ink-soft)">
+    <label for="bridgeUrl" style="font-weight:600">Bridge</label>
+    <input id="bridgeUrl" type="text" value="http://localhost:8000" autocomplete="off" spellcheck="false" style="flex:1;min-width:0">
+    <button id="demoBtn" class="swap" type="button" aria-pressed="false">Use demo data</button>
+  </div>
 </div>
 
 <main>
@@ -242,6 +247,50 @@ let dbReady = (async () => {
 
 const state = { cases: [], selectedFile: null, uploadCount: 0 };
 
+/* ---------- LIVE / OFFLINE / DEMO modes (single canonical bridge URL) ---------- */
+const BRIDGE_DEFAULT = 'http://localhost:8000'; // local dev default; never a production hostname
+const MODES = { LIVE: 'LIVE', OFFLINE: 'OFFLINE', DEMO: 'DEMO' };
+const appMode = { current: MODES.LIVE, bridgeOk: false, demoForced: false };
+function bridgeURL(){
+  const v = (document.getElementById('bridgeUrl').value || '').trim();
+  return v || BRIDGE_DEFAULT;
+}
+function setMode(m, note){
+  appMode.current = m;
+  const badge = document.getElementById('modeBadgeText');
+  badge.textContent = m === MODES.LIVE ? 'LIVE — connected to screening bridge'
+    : m === MODES.OFFLINE ? ('OFFLINE — bridge unreachable' + (note ? ' ('+note+')' : '') + ' — screening disabled, no mock results shown')
+    : 'DEMO — explicit illustrative results, not a model call';
+  document.getElementById('demoBtn').setAttribute('aria-pressed', m === MODES.DEMO ? 'true' : 'false');
+  document.getElementById('demoBtn').textContent = m === MODES.DEMO ? 'Exit demo, use LIVE' : 'Use demo data';
+}
+async function checkBridge(){
+  // LIVE default: probe health with timeout; unreachable -> OFFLINE (never mock).
+  try{
+    const ctl = new AbortController();
+    const t = setTimeout(()=>ctl.abort(), 4000);
+    const r = await fetch(bridgeURL() + '/health', {signal: ctl.signal});
+    clearTimeout(t);
+    if(r.ok){ appMode.bridgeOk = true; if(!appMode.demoForced) setMode(MODES.LIVE); return true; }
+  }catch(e){ /* unreachable -> OFFLINE below */ }
+  appMode.bridgeOk = false;
+  if(!appMode.demoForced) setMode(MODES.OFFLINE);
+  return false;
+}
+document.getElementById('demoBtn').addEventListener('click', ()=>{
+  // DEMO requires explicit user action; leaving DEMO re-probes LIVE.
+  if(appMode.demoForced){ appMode.demoForced = false; checkBridge(); }
+  else { appMode.demoForced = true; setMode(MODES.DEMO); }
+});
+document.getElementById('bridgeUrl').addEventListener('change', ()=>{
+  try{ localStorage.setItem('netrasetu.bridgeURL', bridgeURL()); }catch(e){}
+  appMode.demoForced = false; checkBridge();
+});
+try{
+  const saved = localStorage.getItem('netrasetu.bridgeURL');
+  if(saved) document.getElementById('bridgeUrl').value = saved;
+}catch(e){}
+
 /* ---------- role switching ---------- */
 document.querySelectorAll('.roles button').forEach(btn=>{
   btn.addEventListener('click', ()=>{
@@ -281,7 +330,16 @@ dropzone.addEventListener('drop', e=>{
 fileInput.addEventListener('change', ()=>{ if(fileInput.files[0]) handleFile(fileInput.files[0]); });
 swapBtn.addEventListener('click', ()=>fileInput.click());
 
+const MAX_UPLOAD_BYTES = 15 * 1024 * 1024; // mirror of bridge cap; client-side early error only
 function handleFile(file){
+  if(file && file.size > MAX_UPLOAD_BYTES){
+    document.getElementById('resultBody').innerHTML = '<div class="flag-box">Image exceeds the 15 MB upload limit — please use a smaller file.</div>';
+    return;
+  }
+  if(file && file.type && !file.type.startsWith('image/')){
+    document.getElementById('resultBody').innerHTML = '<div class="flag-box">Upload must be an image file.</div>';
+    return;
+  }
   state.selectedFile = file;
   const reader = new FileReader();
   reader.onload = e=>{
@@ -330,61 +388,206 @@ runBtn.addEventListener('click', async ()=>{
   for(let i=0;i<4;i++){ await stepPipeline(i); }
 
   const pid = document.getElementById('pid').value.trim() || 'unspecified';
-  const seed = hashSeed(pid + state.selectedFile.name + state.selectedFile.size + (state.uploadCount++));
-  const sc = SCENARIOS[seed % SCENARIOS.length];
   const thumb = await resizeToThumb(previewImg.src, 160);
-  renderResult(sc, pid);
-
-  if (sc.dl >= 2 || sc.rule >= 2 || sc.disagree || sc.gradCamOnDisc) {
-    await submitCase(pid, thumb, sc);
+  // LIVE default: real bridge call. OFFLINE: no screening, no mock.
+  // DEMO (explicit toggle only): deterministic illustrative scenario.
+  if(appMode.current === MODES.DEMO){
+    const seed = hashSeed(pid + state.selectedFile.name + state.selectedFile.size + (state.uploadCount++));
+    const sc = demoToBackend(SCENARIOS[seed % SCENARIOS.length]);
+    renderResult(sc, pid, MODES.DEMO);
+    if(shouldQueue(sc)){ await submitCase(pid, thumb, sc); }
+  } else {
+    const live = await checkBridge();
+    if(!live){
+      document.getElementById('resultBody').innerHTML = '<div class="flag-box">Bridge unreachable (OFFLINE) — screening disabled. No mock result shown. Start bridge_server.py or switch to explicit demo mode.</div>';
+      runBtn.disabled=false;
+      return;
+    }
+    try{
+      const fd = new FormData();
+      fd.append('image', state.selectedFile, state.selectedFile.name);
+      const resp = await fetch(bridgeURL() + '/screen', {method:'POST', body:fd});
+      if(resp.status === 429){
+        document.getElementById('resultBody').innerHTML = '<div class="flag-box">Screening engine busy — please retry shortly. No result produced.</div>';
+      } else if(!resp.ok){
+        let detail = '';
+        try{ detail = (await resp.json()).detail || ''; }catch(e){}
+        document.getElementById('resultBody').innerHTML = '<div class="flag-box">Screening failed ('+resp.status+') — '+escapeHtml(detail||'bridge error')+'. No result produced; nothing was graded.</div>';
+      } else {
+        const sc = await resp.json();
+        renderResult(sc, pid, MODES.LIVE);
+        if(shouldQueue(sc)){ await submitCase(pid, thumb, sc); }
+      }
+    }catch(e){
+      setMode(MODES.OFFLINE, 'request failed');
+      document.getElementById('resultBody').innerHTML = '<div class="flag-box">Bridge request failed (OFFLINE) — no result produced. Nothing was graded.</div>';
+    }
   }
   runBtn.disabled=false;
 });
+
+// Backend-shaped adapter for explicit-DEMO scenarios only: maps the
+// legacy mock bank onto the live API field shape. NEVER called from
+// the LIVE path (verified by static test).
+function demoToBackend(sc){
+  return {
+    apiVersion: 'demo', status: 'ok', errorMessage: '',
+    focus: null, entropy: null, roiPassed: true,
+    quality: {decision:'PASS', reasons:[], guidance:[], calibrated:null},
+    dl: sc.dl, conf: sc.conf,
+    clinical: {ruleStatus: sc.rule==null?'INSUFFICIENT_EVIDENCE':'SUFFICIENT'},
+    rule: sc.rule, evidence: sc.evidence,
+    nv: !!sc.nv, nvStatus: sc.nv ? 'PROXY_POSITIVE' : 'NOT_DETECTED',
+    landmarkStatus: {od:null, fovea:null, quadrant:null},
+    explanation: {status:'UNAVAILABLE'},
+    disagreement: {gradeRelationship: (sc.disagree?'NUMERIC_DISAGREE':'AGREE'), escalate: !!(sc.disagree||sc.gradCamOnDisc)},
+    temperature: {value:null, state:'UNAVAILABLE'},
+    modelPresent: false, gradCamOnDisc: !!sc.gradCamOnDisc
+  };
+}
+
+// Queue routing on backend-shaped results (never grades in JS).
+function shouldQueue(sc){
+  if(sc.status === 'busy' || sc.status === 'error') return false;
+  const dl = sc.dl, rule = sc.rule;
+  const referable = (dl != null && dl >= 2) || (rule != null && rule >= 2);
+  const flags = scgradFlags(sc);
+  return referable || flags.length > 0;
+}
+function scgradFlags(sc){
+  const f = [];
+  const rel = sc.disagreement && sc.disagreement.gradeRelationship;
+  if(rel === 'NUMERIC_DISAGREE') f.push('disagreement');
+  if(sc.gradCamOnDisc) f.push('attention check');
+  if(sc.nvStatus === 'PROXY_POSITIVE') f.push('NV screen');
+  else if(sc.nv) f.push('NV screen');
+  if(sc.quality && sc.quality.decision === 'BORDERLINE') f.push('borderline quality');
+  if(sc.clinical && (sc.clinical.ruleStatus === 'INSUFFICIENT_EVIDENCE' || sc.clinical.ruleStatus === 'INVALID')) f.push('insufficient evidence');
+  return f;
+}
 
 function gradeBadge(n){
   if(n>=2) return '<span class="badge badge-referable">Referable — Level '+n+'+</span>';
   return '<span class="badge badge-clear">Not referable</span>';
 }
 
-function renderResult(sc, pid){
-  const disagree = sc.dl !== sc.rule;
-  let html = '';
-  html += '<div class="result">';
-  html += '<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:12.5px;color:var(--ink-soft);font-weight:600">Quality gate</span><span class="badge badge-clear" style="font-size:11.5px">Passed</span></div>';
-  html += '<div class="grade-row"><span class="grade-num">'+sc.dl+'</span><span class="grade-label">'+CLASS_NAMES[sc.dl]+'</span></div>';
-  html += '<div class="confidence">Calibrated confidence '+Math.round(sc.conf*100)+'% &middot; deep-learning pathway</div>';
-  html += gradeBadge(Math.max(sc.dl,sc.rule));
-  html += '<div class="evidence"><h4>Clinical rule engine (independent second opinion)</h4><ul>';
-  sc.evidence.forEach(ev=>{ html += '<li>'+ev+'</li>'; });
-  html += '</ul></div>';
-  if(disagree){
-    html += '<div class="flag-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L2.5 17a2 2 0 001.7 3h15.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>Deep-learning grade (Level '+sc.dl+') and rule-engine grade (Level '+sc.rule+') disagree — routed for manual review.</div>';
+function renderResult(sc, pid, mode){
+  // Renders BACKEND state only. Never computes a grade here; null rule
+  // is "insufficient evidence", never Grade 0; PROXY is never VERIFIED.
+  const badgeMode = mode === MODES.DEMO
+    ? '<span class="badge" style="font-size:11.5px">Explicit demo data — not a model call</span>'
+    : '<span class="badge" style="font-size:11.5px">LIVE backend result</span>';
+  let html = '<div class="result">' + badgeMode;
+  // Quality state (PASS/BORDERLINE/FAIL/ERROR), never hardcoded Passed.
+  const qd = (sc.quality && sc.quality.decision) || (sc.roiPassed === false ? 'FAIL' : 'PASS');
+  html += '<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:12.5px;color:var(--ink-soft);font-weight:600">Quality gate</span><span class="badge badge-clear" style="font-size:11.5px">'+escapeHtml(qd)+'</span></div>';
+  if(sc.quality && sc.quality.reasons && sc.quality.reasons.length){
+    html += '<ul style="font-size:12.5px;color:var(--ink-soft)">'+sc.quality.reasons.map(e=>'<li>'+escapeHtml(e)+'</li>').join('')+'</ul>';
+  }
+  if(sc.dl == null){
+    html += '<div class="grade-row"><span class="grade-label">Deep-learning grade unavailable (simulated/offline model)</span></div>';
+  } else {
+    html += '<div class="grade-row"><span class="grade-num">'+sc.dl+'</span><span class="grade-label">'+escapeHtml(CLASS_NAMES[sc.dl]||('Level '+sc.dl))+'</span></div>';
+  }
+  const cal = sc.temperature && sc.temperature.state ? ' &middot; temperature '+escapeHtml(sc.temperature.state) : '';
+  html += '<div class="confidence">Confidence '+(sc.conf==null?'unavailable':Math.round(sc.conf*100)+'%')+cal+' &middot; deep-learning pathway</div>';
+  const grades = [sc.dl, sc.rule].filter(g=>g!=null);
+  html += grades.length ? gradeBadge(Math.max.apply(null, grades)) : '<span class="badge badge-clear">Not assessable</span>';
+  const rs = (sc.clinical && sc.clinical.ruleStatus) || sc.ruleStatus || null;
+  html += '<div class="evidence"><h4>Clinical rule engine (independent second opinion)</h4>';
+  if(sc.rule == null){
+    html += '<p style="font-size:13px">Insufficient evidence \u2014 no rule grade asserted'+(rs?' ('+escapeHtml(rs)+')':'')+'. Awaiting human review; this is not Grade 0.</p>';
+  } else {
+    html += '<p style="font-size:13px">Rule grade: Level '+sc.rule+(rs?' ('+escapeHtml(rs)+')':'')+'</p>';
+  }
+  html += '<ul>'+(sc.evidence||[]).map(ev=>'<li>'+escapeHtml(ev)+'</li>').join('')+'</ul></div>';
+  const rel = sc.disagreement && sc.disagreement.gradeRelationship;
+  if(rel === 'NUMERIC_DISAGREE' || (sc.disagreement && sc.disagreement.escalate)){
+    html += '<div class="flag-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L2.5 17a2 2 0 001.7 3h15.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>Review flag ('+escapeHtml(rel||'escalated')+') \u2014 routed for manual review.</div>';
   }
   if(sc.gradCamOnDisc){
-    html += '<div class="flag-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L2.5 17a2 2 0 001.7 3h15.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>Grad-CAM attention falls on the optic disc rather than a lesion site — possible spurious prediction, routed for manual review.</div>';
+    html += '<div class="flag-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L2.5 17a2 2 0 001.7 3h15.6a2 2 0 00-3.4 0z"/></svg>Grad-CAM attention falls on the optic disc rather than a lesion site \u2014 possible spurious prediction, routed for manual review.</div>';
   }
-  if(sc.nv){
-    html += '<div class="flag-box" style="background:var(--amber-tint);color:var(--amber)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>Neovascularization screen flagged (vessel density/tortuosity) — screening signal, not a standalone diagnosis.</div>';
+  const nvPos = sc.nvStatus === 'PROXY_POSITIVE' || (!sc.nvStatus && sc.nv);
+  if(nvPos){
+    html += '<div class="flag-box" style="background:var(--amber-tint);color:var(--amber)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>Neovascularization screen flagged (PROXY screening signal'+(sc.nvStatus?', status '+escapeHtml(sc.nvStatus):'')+' \u2014 not a standalone diagnosis).</div>';
   }
-  html += '<p style="font-size:12px;color:var(--ink-soft);margin-top:14px">Patient '+escapeHtml(pid)+' &middot; demo scenario, not a live model call — see the note below.</p>';
+  const exs = sc.explanation && sc.explanation.status;
+  if(exs && exs !== 'VALID'){
+    html += '<div class="flag-box">Explanation reliability: '+escapeHtml(exs)+' \u2014 heatmap should not be relied upon.</div>';
+  }
+  html += '<p style="font-size:12px;color:var(--ink-soft);margin-top:14px">Patient '+escapeHtml(pid)+(mode===MODES.DEMO?' &middot; explicit demo data, not a model call.':' &middot; live backend result.')+'</p>';
   html += '</div>';
   document.getElementById('resultBody').innerHTML = html;
 }
 
 function escapeHtml(s){ return s.replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-/* ---------- shared queue (db) ---------- */
-async function submitCase(pid, thumb, sc){
-  await dbReady;
-  if(!db) return;
+/* ---------- review queue: Claude-db where available, else bounded
+   browser-local fallback (explicitly non-clinical persistence) ---------- */
+const LOCAL_QUEUE_KEY = 'netrasetu.localQueue.v1';
+const LOCAL_QUEUE_MAX = 150; // hard cap; FIFO evict oldest (never unbounded growth)
+function localQueueLoad(){
   try{
-    await db.collection('cases').add({
-      patientId: pid, thumb: thumb, submittedAt: Date.now(),
-      dlGrade: sc.dl, confidence: sc.conf, ruleGrade: sc.rule, evidence: sc.evidence,
-      disagree: sc.dl!==sc.rule, gradCamOnDisc: !!sc.gradCamOnDisc, nvFlagged: !!sc.nv,
-      status: 'pending', reviewerGrade: null, reviewerNotes: '', reviewedAt: null
-    });
-  }catch(e){ console.warn('submitCase failed', e); }
+    const raw = localStorage.getItem(LOCAL_QUEUE_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  }catch(e){ return []; }
+}
+// Returns 'ok' | 'quota-unavailable'. Never throws, never silently drops
+// without reporting: on quota failure oldest records are evicted and the
+// write retried once; persistent failure surfaces a visible state.
+function localQueueSave(cases){
+  try{
+    localStorage.setItem(LOCAL_QUEUE_KEY, JSON.stringify(cases.slice(-LOCAL_QUEUE_MAX)));
+    return 'ok';
+  }catch(e){
+    try{
+      localStorage.setItem(LOCAL_QUEUE_KEY, JSON.stringify(cases.slice(-50)));
+      return 'ok-evicted';
+    }catch(e2){ return 'quota-unavailable'; }
+  }
+}
+// Backend-shaped queue record: full AI state + provenance, reviewer
+// decision stored under SEPARATE keys (never overwrites AI output).
+// Thumbnail only (160px JPEG); raw uploads are never persisted.
+function toQueueRecord(pid, thumb, sc){
+  const rel = sc.disagreement && sc.disagreement.gradeRelationship;
+  return {
+    id: 'local-' + Date.now() + '-' + Math.floor(Math.random()*1e6),
+    patientId: pid, thumb: thumb || null, submittedAt: Date.now(),
+    dlGrade: (sc.dl==null?null:sc.dl), confidence: (sc.conf==null?null:sc.conf),
+    ruleGrade: (sc.rule==null?null:sc.rule),
+    ruleStatus: (sc.clinical && sc.clinical.ruleStatus) || sc.ruleStatus || null,
+    evidence: Array.isArray(sc.evidence) ? sc.evidence.slice(0, 50) : [],
+    qualityDecision: (sc.quality && sc.quality.decision) || null,
+    nvStatus: sc.nvStatus || null,
+    nvFlagged: sc.nvStatus === 'PROXY_POSITIVE' || (!sc.nvStatus && !!sc.nv),
+    gradCamOnDisc: !!sc.gradCamOnDisc,
+    explanationStatus: (sc.explanation && sc.explanation.status) || null,
+    disagreement: rel || null, escalate: !!(sc.disagreement && sc.disagreement.escalate),
+    temperatureState: (sc.temperature && sc.temperature.state) || null,
+    modelPresent: !!sc.modelPresent,
+    apiVersion: sc.apiVersion || null,
+    status: 'pending', reviewerGrade: null, reviewerNotes: '', reviewedAt: null
+  };
+}
+async function submitCase(pid, thumb, sc){
+  // Route every queued case through the backend-shaped record first so
+  // Claude-db and browser-local entries share one schema.
+  const rec = toQueueRecord(pid, thumb, sc);
+  await dbReady;
+  if(db){
+    try{
+      await db.collection('cases').add(Object.assign({}, rec, {id: undefined}));
+      return 'shared';
+    }catch(e){ console.warn('submitCase shared failed, falling back to browser-local', e); }
+  }
+  const cases = localQueueLoad();
+  cases.push(rec);
+  const st = localQueueSave(cases);
+  state.localQueueState = st;
+  return st === 'ok' || st === 'ok-evicted' ? 'browser-local' : 'queue-unavailable';
 }
 
 let unsubQueue=null;
@@ -393,9 +596,15 @@ async function initQueue(){
   const noteReview=document.getElementById('offlineNoteReview');
   const noteAdmin=document.getElementById('offlineNoteAdmin');
   if(!db){
-    const msg='<div class="offline-note">Shared queue isn\'t reachable in this view — cases submitted from the Screening tab in this same browser session won\'t sync here. Open this artifact directly in Claude to use the live queue.</div>';
-    noteReview.innerHTML=msg; noteAdmin.innerHTML=msg;
-    renderQueue([]); renderStats([]);
+    // Browser-local fallback: list locally queued cases; cloud sync stays
+    // unavailable and is labeled as such (never claimed).
+    const local = localQueueLoad();
+    state.cases = local;
+    const qmsg = state.localQueueState === 'quota-unavailable'
+      ? '<div class="offline-note">Browser-local queue unavailable (storage quota) — new results cannot be queued in this browser. Shared/cloud queue: not configured in this view.</div>'
+      : '<div class="offline-note">Browser-local queue (this browser only — non-clinical persistence, not cloud-synced). Shared queue: not configured in this view.</div>';
+    noteReview.innerHTML=qmsg; noteAdmin.innerHTML=qmsg;
+    renderQueue(state.cases); renderStats(state.cases);
     return;
   }
   try{
@@ -414,19 +623,35 @@ function timeAgo(ts){
   return Math.floor(s/3600)+' hr ago';
 }
 
+function caseFlags(c){
+  // Backend-shaped flags (tolerates legacy Claude-db records).
+  const f = [];
+  if(c.disagree === true || (c.disagreement && c.disagreement.gradeRelationship === 'NUMERIC_DISAGREE')) f.push('disagreement');
+  if(c.gradCamOnDisc) f.push('attention check');
+  if(c.nvStatus === 'PROXY_POSITIVE' || (!c.nvStatus && c.nvFlagged)) f.push('NV screen');
+  if(c.qualityDecision === 'BORDERLINE') f.push('borderline quality');
+  if(c.ruleStatus === 'INSUFFICIENT_EVIDENCE' || c.ruleStatus === 'INVALID') f.push('insufficient evidence');
+  if(c.explanationStatus && c.explanationStatus !== 'VALID') f.push('explanation ' + c.explanationStatus.toLowerCase());
+  return f;
+}
+function caseGrades(c){
+  const g = [c.dlGrade, c.ruleGrade].filter(v=>v!=null);
+  return g;
+}
 function renderQueue(cases){
   const pending = cases.filter(c=>c.status==='pending');
   const reviewed = cases.filter(c=>c.status==='reviewed');
   const q=document.getElementById('queueList');
   if(pending.length===0){
-    q.innerHTML='<div class="queue-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg><div>Queue is empty — nothing waiting on a human read.</div></div>';
+    q.innerHTML='<div class="queue-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg><div>Queue is empty \u2014 nothing waiting on a human read.</div></div>';
   } else {
     q.innerHTML = pending.map(c=>{
-      const flags=[c.disagree?'disagreement':null, c.gradCamOnDisc?'attention check':null, c.nvFlagged?'NV screen':null].filter(Boolean);
-      return '<div class="queue-item" data-id="'+c.id+'">'+
+      const flags=caseFlags(c);
+      const g=caseGrades(c);
+      return '<div class="queue-item" data-id="'+escapeHtml(String(c.id))+'">'+
         (c.thumb?'<img src="'+c.thumb+'" alt="">':'<div style="width:52px;height:52px;border-radius:9px;background:var(--paper)"></div>')+
-        '<div class="meta"><div class="pid">'+escapeHtml(c.patientId)+'</div><div class="when">'+timeAgo(c.submittedAt)+(flags.length?' &middot; '+flags.join(', '):'')+'</div></div>'+
-        gradeBadge(Math.max(c.dlGrade,c.ruleGrade))+
+        '<div class="meta"><div class="pid">'+escapeHtml(String(c.patientId))+'</div><div class="when">'+timeAgo(c.submittedAt)+(flags.length?' &middot; '+flags.map(escapeHtml).join(', '):'')+'</div></div>'+
+        (g.length?gradeBadge(Math.max.apply(null,g)):'<span class="badge badge-clear">Not assessable</span>')+
       '</div>';
     }).join('');
     q.querySelectorAll('.queue-item').forEach(el=>el.addEventListener('click', ()=>openDetail(el.dataset.id)));
@@ -434,28 +659,32 @@ function renderQueue(cases){
   const rl=document.getElementById('reviewedList');
   rl.innerHTML = reviewed.length? reviewed.map(c=>
     '<div class="queue-item" style="cursor:default;opacity:.75">'+
-    (c.thumb?'<img src="'+c.thumb+'" alt="">':'<div style="width:52px;height:52px;border-radius:9px;background:var(--paper)"></div>')+
-    '<div class="meta"><div class="pid">'+escapeHtml(c.patientId)+'</div><div class="when">reviewed as Level '+c.reviewerGrade+'</div></div>'+
+    (c.thumb?'<img src="'+c.thumb+'" style="width:52px;height:52px;border-radius:9px" alt="">':'<div style="width:52px;height:52px;border-radius:9px;background:var(--paper)"></div>')+
+    '<div class="meta"><div class="pid">'+escapeHtml(String(c.patientId))+'</div><div class="when">reviewed as Level '+c.reviewerGrade+'</div></div>'+
     '</div>'
   ).join('') : '<p style="color:var(--ink-soft);font-size:13.5px">No cases reviewed yet.</p>';
 }
 
 function openDetail(id){
-  const c = state.cases.find(x=>x.id===id);
+  const c = state.cases.find(x=>String(x.id)===String(id));
   if(!c) return;
+  const dlTxt = c.dlGrade==null ? 'unavailable' : ('Level '+c.dlGrade+' \u2014 '+escapeHtml(CLASS_NAMES[c.dlGrade]||''));
+  const dlConf = (c.confidence==null||c.dlGrade==null) ? '' : ' &middot; '+Math.round(c.confidence*100)+'% conf.';
+  const ruleTxt = c.ruleGrade==null
+    ? 'Insufficient evidence \u2014 no rule grade asserted'+(c.ruleStatus?' ('+escapeHtml(c.ruleStatus)+')':'')+'. Not Grade 0.'
+    : ('Level '+c.ruleGrade+(c.ruleStatus?' ('+escapeHtml(c.ruleStatus)+')':''));
   const mount=document.getElementById('detailMount');
   mount.innerHTML = '<div class="detail-overlay" id="ov"><div class="detail-panel">'+
     '<button class="detail-close" id="closeBtn">&times;</button>'+
-    '<h2 style="margin:0 0 4px;font-size:19px;font-weight:800;font-family:var(--font-head)">'+escapeHtml(c.patientId)+'</h2>'+
+    '<h2 style="margin:0 0 4px;font-size:19px;font-weight:800;font-family:var(--font-head)">'+escapeHtml(String(c.patientId))+'</h2>'+
     '<p style="color:var(--ink-soft);font-size:13px;margin:0 0 4px">Submitted '+timeAgo(c.submittedAt)+'</p>'+
     (c.thumb?'<img src="'+c.thumb+'" style="width:100%;max-width:220px;border-radius:10px;margin:10px 0" alt="">':'')+
-    '<div class="compare"><div class="col"><h5>Deep learning</h5><div class="val">'+c.dlGrade+'</div><div style="font-size:12px;color:var(--ink-soft)">'+CLASS_NAMES[c.dlGrade]+' &middot; '+Math.round(c.confidence*100)+'% conf.</div></div>'+
-    '<div class="col"><h5>Clinical rule engine</h5><div class="val">'+c.ruleGrade+'</div><div style="font-size:12px;color:var(--ink-soft)">'+CLASS_NAMES[c.ruleGrade]+'</div></div></div>'+
-    (c.disagree?'<div class="flag-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/></svg>Grades disagree — treat with extra scrutiny.</div>':'')+
-    (c.gradCamOnDisc?'<div class="flag-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/></svg>Grad-CAM attention lands on the optic disc — possible spurious call.</div>':'')+
-    '<div class="evidence"><h4>Evidence</h4><ul>'+c.evidence.map(e=>'<li>'+e+'</li>').join('')+'</ul></div>'+
+    '<div class="compare"><div class="col"><h5>Deep learning</h5><div class="val">'+(c.dlGrade==null?'\u2014':c.dlGrade)+'</div><div style="font-size:12px;color:var(--ink-soft)">'+dlTxt+dlConf+'</div></div>'+
+    '<div class="col"><h5>Clinical rule engine</h5><div class="val">'+(c.ruleGrade==null?'\u2014':c.ruleGrade)+'</div><div style="font-size:12px;color:var(--ink-soft)">'+ruleTxt+'</div></div></div>'+
+    (caseFlags(c).length?'<div class="flag-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/></svg>'+caseFlags(c).map(escapeHtml).join('; ')+' \u2014 treat with extra scrutiny.</div>':'')+
+    '<div class="evidence"><h4>Evidence</h4><ul>'+(Array.isArray(c.evidence)?c.evidence:[]).map(e=>'<li>'+escapeHtml(String(e))+'</li>').join('')+'</ul></div>'+
     '<label style="margin-top:14px">Confirmed grade</label>'+
-    '<select id="overrideGrade">'+[0,1,2,3,4].map(n=>'<option value="'+n+'"'+(n===c.dlGrade?' selected':'')+'>Level '+n+' — '+CLASS_NAMES[n]+'</option>').join('')+'</select>'+
+    '<select id="overrideGrade">'+[0,1,2,3,4].map(n=>'<option value="'+n+'"'+(n===c.dlGrade?' selected':'')+'>Level '+n+' \u2014 '+CLASS_NAMES[n]+'</option>').join('')+'</select>'+
     '<label>Notes for the record</label><textarea id="reviewNotes" placeholder="Optional"></textarea>'+
     '<button class="btn btn-primary" id="confirmBtn">Confirm &amp; mark reviewed</button>'+
   '</div></div>';
@@ -464,10 +693,18 @@ function openDetail(id){
   document.getElementById('confirmBtn').addEventListener('click', async ()=>{
     const grade = parseInt(document.getElementById('overrideGrade').value,10);
     const notes = document.getElementById('reviewNotes').value;
-    if(db){
+    // Reviewer decision stored SEPARATELY (never overwrites AI output).
+    c.status='reviewed'; c.reviewerGrade=grade; c.reviewerNotes=notes; c.reviewedAt=Date.now();
+    if(String(c.id).indexOf('local-')===0){
+      const all = localQueueLoad();
+      const ix = all.findIndex(x=>String(x.id)===String(c.id));
+      if(ix>=0){ all[ix]=c; localQueueSave(all); }
+      state.cases = localQueueLoad();
+    } else if(db){
       try{ await db.doc('cases/'+c.id).update({status:'reviewed', reviewerGrade:grade, reviewerNotes:notes, reviewedAt:Date.now()}); }
       catch(e){ console.warn('review update failed', e); }
     }
+    renderQueue(state.cases); renderStats(state.cases);
     mount.innerHTML='';
   });
 }
@@ -476,8 +713,8 @@ function openDetail(id){
 function renderStats(cases){
   const total=cases.length;
   const pending=cases.filter(c=>c.status==='pending').length;
-  const referable=cases.filter(c=>Math.max(c.dlGrade,c.ruleGrade)>=2).length;
-  const flagged=cases.filter(c=>c.disagree||c.gradCamOnDisc).length;
+  const referable=cases.filter(c=>{ const g=caseGrades(c); return g.length>0 && Math.max.apply(null,g)>=2; }).length;
+  const flagged=cases.filter(c=>caseFlags(c).length>0).length;
   const row=document.getElementById('statRow');
   row.innerHTML =
     '<div class="stat"><div class="num">'+total+'</div><div class="lbl">Cases screened</div></div>'+
@@ -486,7 +723,9 @@ function renderStats(cases){
     '<div class="stat c-sage"><div class="num">'+flagged+'</div><div class="lbl">Safety flags raised</div></div>';
 }
 
+checkBridge();
 initQueue();
+})();initQueue();
 })();
 </script>
 </body>

@@ -81,18 +81,21 @@ documented but couldn't find.
 - `runBatchScreening.m` processes a whole folder and won't halt on one
   bad image, but "won't halt" isn't "validated at scale" — it hasn't
   been run against anything close to 100,000 real images.
-- The NetraSetu web console (`netrasetu.html`) runs entirely on
-  deterministic demo data — it is not wired to `bridge_server.py` or any
-  real MATLAB inference yet. Its shared review queue also depends on the
+- The NetraSetu web console (`netrasetu.html`) defaults to LIVE against
+  `bridge_server.py` with explicit DEMO/OFFLINE modes (mock SCENARIOS are
+  DEMO-only and labeled). Its shared review queue still depends on the
   `db` capability's organization-level sharing rules, which weren't
-  confirmed to work for an external (non-org) viewer such as a judge —
-  test that specifically before relying on it live.
-- `bridge_server.py` is written against the documented MATLAB Engine for
-  Python API and passed everything testable without a real MATLAB
-  installation (routing, health checks, the struct-to-JSON conversion
-  against a simulated struct) — the actual engine call has not been run
-  for real. It also has no authentication and a wide-open CORS policy;
-  both need tightening before this leaves a laptop.
+  confirmed to work for an external (non-org) viewer such as a judge;
+  a bounded browser-local fallback exists and is labeled non-clinical —
+  test either path specifically before relying on it live.
+- `bridge_server.py` serializes screening on one worker thread (second
+  concurrent caller gets 429), enforces the 15 MB cap, and forwards the
+  versioned API schema — but the live engine call, concurrency under
+  load, and struct conversion have not been run against real MATLAB
+  here (MATLAB-GATED). It also has no authentication and a wide-open
+  CORS policy (SECURITY-GATED); both need tightening before this leaves
+  a laptop. Static frontend: READY-TO-CONFIGURE; MATLAB bridge host:
+  required; live deployment: NOT VERIFIED.
 - The `db` capability backing the demo queue caps out around 5,000
   documents — nowhere near "100,000+ patients annually." See
   `production_schema.sql` for the real migration target.
