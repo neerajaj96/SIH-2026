@@ -43,15 +43,17 @@ def test_grading_contract():
     check("ICDR idx-1 mapping (inference)",
           "idx - 1" in txt("runScreeningPipeline.m"), "mapping missing")
     check("head dr_fc + softmax prob", "dr_fc" in g and "softmax" in g.lower(), "head drift")
-    check("5 outputs numClasses=5", "numClasses = 5" in g, "output count drift")
-    check("ordinal loss ce+lambda*penalty", "ordinalPenalty" in g and "lambda" in g, "loss drift")
+    check("5 outputs numClasses=5 (gradingConfig canonical)",
+          "cfg.numClasses = 5" in txt("gradingConfig.m") and "gcfg.numClasses" in g, "output count drift")
+    check("ordinal loss via ordinalGradingLoss + config lambda",
+          os.path.exists(os.path.join(ROOT, "ordinalGradingLoss.m")) and "ordinalGradingLoss" in g and "ordinalLambda" in txt("gradingConfig.m"), "loss drift")
     check("first-conv seeded from mean (no random init)",
           "mean(oldW" in g, "weight seeding drift")
     check("checkpoint metadata saved", "saveModelWithMetadata" in g, "repro gap")
-    check("fusion masks nearest", g.count("'nearest'") >= 2, "interp regression")
-    # config centralization gap (documented, not fixed here)
-    check("grading hyperparams inline (KNOWN GAP, not centralized)",
-          "lambda = 0.5" in g, "unexpected")
+    check("fusion via canonical builder (nearest masks per config)",
+          "buildGradingFusionTensor" in g and "maskInterp" in txt("gradingConfig.m") and "'nearest'" in txt("gradingConfig.m"), "interp regression")
+    check("grading hyperparams centralized in gradingConfig (Stage-3 fixed prior gap)",
+          "ordinalLambda" in txt("gradingConfig.m"), "unexpected")
 
 
 def test_quality_canonical():

@@ -82,10 +82,14 @@ def test_single_source_configs():
 def test_interp_and_shapes():
     rsp = txt("runScreeningPipeline.m")
     grd = txt("train_DR_Grader.m")
-    check("fusion masks nearest (both consumers)",
-          rsp.count("'nearest'") >= 2 and grd.count("'nearest'") >= 2, "masks must be nearest")
-    check("fusion photos bilinear (both consumers)",
-          "'bilinear'" in rsp and "'bilinear'" in grd, "photos must be bilinear")
+    builder = txt("buildGradingFusionTensor.m")
+    gcfg = txt("gradingConfig.m")
+    # Training path delegates to canonical builder (Stage-3); inference
+    # path inlines identical semantics (deliberate, header-documented).
+    check("fusion masks nearest (inference inline + builder/config)",
+          rsp.count("'nearest'") >= 2 and "'nearest'" in gcfg and "maskInterp" in builder, "masks must be nearest")
+    check("fusion photos bilinear (inference inline + builder/config)",
+          "'bilinear'" in rsp and "'bilinear'" in gcfg and "photoInterp" in builder, "photos must be bilinear")
     # executable shape proof on synthetic 96px frame
     img = I.fundus(96, 96, 34)
     g = I.gray(img)

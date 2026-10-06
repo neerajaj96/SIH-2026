@@ -1,5 +1,13 @@
 # Grading Contract — Stage-3 DR Severity Grading (Contributor B)
 
+> MERGE NOTE (P1+P2+P3 integration): the "Stage-1 files do not exist"
+> statement below was true on `origin/main` at Stage-3 time (Stage-1 had
+> never been pushed there). After merging Stage-1/2/3, `qualityConfig.m`,
+> `assessFundusQuality.m`, `qualityLoadCalibration.m` and
+> `QUALITY_CONTRACT.md` DO exist on `main`; the authoritative cross-stage
+> contract is now `STAGES_1_2_3_INTEGRATION_HANDOFF.md`. No Stage-3 content
+> below was altered.
+
 Source files (actual current tree; `qualityConfig.m`,
 `assessFundusQuality.m` and `QUALITY_CONTRACT.md` named in the mission do
 **not** exist - Stage-1 is `assessAndEnhanceImage.m` +
