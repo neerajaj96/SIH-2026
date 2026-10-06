@@ -190,6 +190,19 @@ def test_provenance_api():
         check(f"11. explanation provenance has {k}", k in grad, "provenance gap")
     check("14. fused-channels caveat present",
           "cannot by itself distinguish photographic evidence" in grad, "causality overclaim")
+    pinf = txt("production_inference.m")
+    check("14b. caveat printed exactly once in PDF report",
+          pinf.count("Caveat: ") >= 1 and "Paragraph(['Caveat:" in pinf.replace(" ", ""), "PDF caveat missing")
+    check("14b. caveat printed exactly once in txt report",
+          "'Caveat: %s" in pinf, "txt caveat missing")
+    n_caveat = pinf.count("explainChannelsCaveat")
+    check("14b. single canonical source (no duplicated wording)",
+          n_caveat == 2 and "r.explainChannelsCaveat=gradRep.channelsCaveat" in txt("runScreeningPipeline.m").replace(" ", ""),
+          f"caveat refs={n_caveat} (expect PDF + txt, set once in pipeline)")
+    check("disagreement has no dead params",
+          "nvStatus" not in txt("analyzeDisagreement.m") and "qualityDecision" not in txt("analyzeDisagreement.m"), "misleading signature")
+    check("pipeline call matches slim signature",
+          "r.explainStatus)" in txt("runScreeningPipeline.m"), "caller drift")
     a = disagreement(3, 3, "CALIBRATED", "SUFFICIENT", "VALID")
     b = disagreement(3, 3, "CALIBRATED", "SUFFICIENT", "VALID")
     check("13. deterministic disagreement", a == b, "")

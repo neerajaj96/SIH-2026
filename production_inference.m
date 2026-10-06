@@ -262,6 +262,7 @@ if haveReportGen
         if haveTrainedModels
             add(rpt, Chapter('Title','Grad-CAM Overlay'));
             add(rpt, Image(gradcamPath));
+            add(rpt, Paragraph(['Caveat: ' r.explainChannelsCaveat]));
         end
 
         close(rpt);
@@ -328,6 +329,7 @@ if ~reportProducedAsPdf
     fprintf(fid, 'Detected lesion mask: %s\n', lesionPath);
     if haveTrainedModels
         fprintf(fid, 'Grad-CAM overlay: %s\n', gradcamPath);
+        fprintf(fid, 'Caveat: %s\n', r.explainChannelsCaveat);
     end
     fclose(fid);
     fprintf('Wrote %s\n', txtPath);

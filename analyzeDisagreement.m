@@ -1,4 +1,4 @@
-function dis = analyzeDisagreement(dlGrade, confidence, confStatus, ruleGrade, ruleStatus, nvStatus, qualityDecision, explainStatus, varargin)
+function dis = analyzeDisagreement(dlGrade, confidence, confStatus, ruleGrade, ruleStatus, explainStatus, varargin)
 % analyzeDisagreement: Structured DL-vs-clinical disagreement model.
 %
 % Orthogonal dimensions (never one mutually-exclusive enum - uncertainty
@@ -19,9 +19,11 @@ function dis = analyzeDisagreement(dlGrade, confidence, confStatus, ruleGrade, r
 %
 % INPUTS: dlGrade (NaN if simulated), confidence (NaN if simulated),
 %   confStatus ('CALIBRATED'/'UNCALIBRATED' from temperature state),
-%   ruleGrade (NaN if INSUFFICIENT), ruleStatus, nvStatus (informational),
-%   qualityDecision ('PASS'/'BORDERLINE'/'FAIL'), explainStatus,
-%   'Config' (explainabilityConfig), 'Confidence' threshold override.
+%   ruleGrade (NaN if INSUFFICIENT), ruleStatus, explainStatus,
+%   'Config' (explainabilityConfig).
+% NOTE: NV status and quality decision are intentionally NOT parameters -
+%   NV/screening and quality gating reach escalation through ruleStatus
+%   and the pipeline's own quality handling, not through this function.
 %
 % Requires: base MATLAB only (pure logic).
 

@@ -62,6 +62,7 @@ r = struct('status','ok','errorMessage','', 'focus',NaN,'entropy',NaN,'roiPassed
     'haveTrainedModels',false, ...
     'dlGrade',NaN,'confidence',NaN,'scoreMap',[],'gradCamOnDisc',false, ...
     'explainStatus','UNAVAILABLE','explainReasons',{{}},'explainProvenance','no trained models (simulated)', ...
+    'explainChannelsCaveat','', ...
     'temperatureT',NaN,'temperatureCalibrated',false,'temperatureState','UNAVAILABLE','temperatureSource','simulated (no trained models)', ...
     'disagreement',struct('clinicalEvidenceStatus','INSUFFICIENT_EVIDENCE','gradeRelationship','NOT_COMPARABLE', ...
         'confidenceStatus','UNCALIBRATED','explanationStatus','UNAVAILABLE','escalate',true,'reasons',{{'simulated mode'}}));
@@ -187,6 +188,7 @@ try
         r.explainStatus = gradRep.status;
         r.explainReasons = gradRep.reasons;
         r.explainProvenance = gradRep.provenance;
+        r.explainChannelsCaveat = gradRep.channelsCaveat;
         % Legacy peak-on-disc flag preserved from the canonical peak
         % (post-ROI-mask, so border peaks cannot trigger it).
         if ~isempty(gradMap)
@@ -204,7 +206,7 @@ try
         confState = 'UNCALIBRATED';
     end
     r.disagreement = analyzeDisagreement(r.dlGrade, r.confidence, confState, ...
-        r.ruleGrade, r.ruleStatus, r.nvStatus, r.qualityDecision, r.explainStatus);
+        r.ruleGrade, r.ruleStatus, r.explainStatus);
 catch ME
     r.status = 'error';
     r.errorMessage = ME.message;

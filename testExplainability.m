@@ -45,13 +45,13 @@ assert(isempty(strfind(rsp,'gradCAM(')), 'second Grad-CAM path in pipeline');
 end
 
 function cDisagree()
-d = analyzeDisagreement(2, 0.9, 'CALIBRATED', 2, 'SUFFICIENT', 'NOT_DETECTED', 'PASS', 'VALID');
+d = analyzeDisagreement(2, 0.9, 'CALIBRATED', 2, 'SUFFICIENT', 'VALID');
 assert(strcmp(d.gradeRelationship,'AGREE') && ~d.escalate, 'agree case broken');
-d2 = analyzeDisagreement(3, 0.9, 'CALIBRATED', 2, 'SUFFICIENT', 'NOT_DETECTED', 'PASS', 'VALID');
+d2 = analyzeDisagreement(3, 0.9, 'CALIBRATED', 2, 'SUFFICIENT', 'VALID');
 assert(strcmp(d2.gradeRelationship,'NUMERIC_DISAGREE') && d2.escalate, 'disagree must escalate');
-d3 = analyzeDisagreement(3, 0.9, 'CALIBRATED', NaN, 'INSUFFICIENT_EVIDENCE', 'UNAVAILABLE', 'BORDERLINE', 'UNAVAILABLE');
+d3 = analyzeDisagreement(3, 0.9, 'CALIBRATED', NaN, 'INSUFFICIENT_EVIDENCE', 'UNAVAILABLE');
 assert(strcmp(d3.gradeRelationship,'NOT_COMPARABLE') && d3.escalate, 'insufficient must not read as disagree/agree');
-d4 = analyzeDisagreement(NaN, NaN, 'UNCALIBRATED', NaN, 'INSUFFICIENT_EVIDENCE', 'INVALID', 'FAIL', 'INVALID');
+d4 = analyzeDisagreement(NaN, NaN, 'UNCALIBRATED', NaN, 'INSUFFICIENT_EVIDENCE', 'INVALID');
 assert(strcmp(d4.confidenceStatus,'UNCALIBRATED'), 'fallback T must never read calibrated');
 end
 
