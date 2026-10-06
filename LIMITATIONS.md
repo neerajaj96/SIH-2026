@@ -78,6 +78,9 @@ documented but couldn't find.
 - SimEvents block library paths and some event-action parameter names are
   more version-sensitive than base MATLAB — verify interactively before
   a live Simulink demo, don't assume the first run will just work.
+  Telemedicine numbers (arrival/service/bandwidth/payload rates, staffing
+  answers) are SCENARIO/ASSUMED until field-measured; the SimEvents vs
+  analytic consistency check has never executed here (MATLAB-GATED).
 - `runBatchScreening.m` processes a whole folder and won't halt on one
   bad image, but "won't halt" isn't "validated at scale" — it hasn't
   been run against anything close to 100,000 real images.

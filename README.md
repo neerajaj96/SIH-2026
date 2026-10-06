@@ -13,7 +13,7 @@ MATLAB-first pipeline + web demo + deployment scaffolding:
 - **Clinical rule second opinion:** `assignClinicalGrade.m` (status-aware ICDR 4-2-1: SUFFICIENT/INSUFFICIENT_EVIDENCE/PROXY, VB/IRMA UNAVAILABLE stubs, merged-MA/HE "4" with speckle guard), `partitionQuadrants.m` (validity-gated), `localizeOpticDiscFovea.m` (+validity/provenance), `detectNeovascularization.m` (screening proxy with usability gates)
 - **Inference:** `production_inference.m` (SIMULATED until real `.mat` weights exist), `runScreeningPipeline.m`, `runBatchScreening.m`, `screenOneImage.m`, `saveModelWithMetadata.m`, `getOrLoadCachedModels.m`, `loadModelsIfPresent.m`
 - **Data:** `datasetRegistry.m` (single source of truth), `buildGradingDatasets.m`, `buildMessidorTestSet.m`, `buildPatientLevelSplit.m`
-- **Telemed / capacity:** `buildTelemedModel.m`, `SimEvents_Telemed_Model.m`, `optimizeResourceAllocation.m`, `erlangCWaitHours.m`
+- **Telemed / capacity:** `telemedConfig.m` (single versioned config), `buildTelemedModel.m` (SimEvents topology + transmission server + wait logging), `SimEvents_Telemed_Model.m` (demo), `optimizeResourceAllocation.m` (SLA sweep on tested Erlang-C), `erlangCWaitHours.m`, `evaluateTelemedConsistency.m` (analytic-vs-sim, MATLAB-GATED). See `STAGE8_TELEMED_SIMULATION_HANDOFF.md` for the assumption ledger.
 - **Demo + deploy:** `netrasetu.html` (LIVE bridge console with explicit DEMO/OFFLINE modes), `bridge_server.py` (FastAPI → MATLAB Engine bridge, serialized screening, versioned API), `production_schema.sql` (Postgres migration target)
 - **Docs:** `SIH26038_project_handoff.md`, `LIMITATIONS.md`, `SIH2026_Problem_Statement_26038.pdf`, `SIH26038_Idea_Presentation-1.pptx`
 
