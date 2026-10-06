@@ -57,6 +57,9 @@ nPassed = 0; nTotal = 0;
     'assignClinicalGrade reproduces all 7 hand-built ICDR test cases (one per level + one per Severe-NPDR trigger)', @() localTestClinicalGradeRules());
 
 [nPassed, nTotal] = localCheck(nPassed, nTotal, ...
+    'assignClinicalGrade returns INSUFFICIENT_EVIDENCE (never 0-4) when VB/IRMA/vitreous are UNAVAILABLE', @() localTestClinicalGradeInsufficient());
+
+[nPassed, nTotal] = localCheck(nPassed, nTotal, ...
     'detectNeovascularization scores a straight synthetic vessel lower than a tortuous one near the same disc', @() localTestTortuosityOrdering());
 
 [nPassed, nTotal] = localCheck(nPassed, nTotal, ...
@@ -181,21 +184,27 @@ end
 
 % ------------------------------------------------------------------
 function localTestClinicalGradeRules()
-% The 7 hand-built cases assignClinicalGrade.m's own header says it was
-% checked against (one per ICDR level, plus one for each of the three
-% separate Severe-NPDR triggers) - previously only asserted true in a
-% comment, never actually runnable. This makes that claim a real,
-% re-checkable test.
+% TRUTH-TABLE / LOGIC TESTS (not clinical validation): the 7 hand-built
+% cases exercising the 4-2-1 ladder when every trigger is assessable.
+% VB/IRMA/vitreous carry explicit VERIFIED statuses here (as a future
+% validated assessor or manual grader would supply); the production
+% pipeline supplies none, so it gets INSUFFICIENT_EVIDENCE (see
+% localTestClinicalGradeInsufficient). Blobs are 3x3 (9px) so the
+% canonical >=6px speckle filter keeps them: 1px dots must NEVER fire
+% the "4" trigger (see the speckle adversarial cases).
 H = 60; W = 60;
 q = zeros(H,W,'uint8');
 q(1:30,1:30)=1; q(1:30,31:60)=2; q(31:60,1:30)=3; q(31:60,31:60)=4; % arbitrary but valid 1-4 quadrant split
 
 baseInfo = struct('maPresent', false, 'exudatePresent', false, 'venousBeadingQuadrants', 0, ...
-                   'irmaQuadrants', 0, 'neovascularization', false, 'vitreousHemorrhage', false);
+                   'venousBeadingStatus', 'VERIFIED', 'irmaQuadrants', 0, 'irmaStatus', 'VERIFIED', ...
+                   'neovascularization', false, 'neovascularizationStatus', 'NOT_DETECTED', ...
+                   'vitreousHemorrhage', false, 'vitreousStatus', 'VERIFIED');
 
 % Level 0
-[g, ~] = assignClinicalGrade(false(H,W), q, baseInfo);
+[g, ~, rep] = assignClinicalGrade(false(H,W), q, baseInfo);
 assert(g == 0, sprintf('Level 0 case: got %d', g));
+assert(strcmp(rep.status,'SUFFICIENT'), 'Level 0 all-assessable must be SUFFICIENT');
 
 % Level 1: MA only
 info = baseInfo; info.maPresent = true;
@@ -207,48 +216,67 @@ info = baseInfo; info.exudatePresent = true;
 [g, ~] = assignClinicalGrade(false(H,W), q, info);
 assert(g == 2, sprintf('Level 2 case: got %d', g));
 
-% Level 3, trigger (a): >20 hemorrhages in ALL 4 quadrants (hemorrhage
-% COUNT via connected components, not area, is what the rule needs - so
-% this places genuinely isolated 1px blobs, not a shape)
+% Level 3, trigger (a): >20 hemorrhages in ALL 4 quadrants (lesion
+% COUNT via connected components, not area - 3x3 blocks on a stride-5
+% grid, each well above the 6px speckle floor)
 hemMask = localSparseBlobs(H,W,1,1,21) | localSparseBlobs(H,W,1,31,21) | ...
           localSparseBlobs(H,W,31,1,21) | localSparseBlobs(H,W,31,31,21);
 [g, ev] = assignClinicalGrade(hemMask, q, baseInfo);
 assert(g == 3, sprintf('Level 3(a) case: got %d', g));
 assert(any(contains(ev, '"4"')), 'Level 3(a) case: evidence should cite the "4" (quadrant hemorrhage) trigger');
 
-% Level 3, trigger (b): venous beading in >=2 quadrants
+% Level 3, trigger (b): venous beading in >=2 quadrants (explicit input)
 info = baseInfo; info.venousBeadingQuadrants = 2;
 [g, ev] = assignClinicalGrade(false(H,W), q, info);
 assert(g == 3, sprintf('Level 3(b) case: got %d', g));
 assert(any(contains(ev, '"2"')), 'Level 3(b) case: evidence should cite the "2" (venous beading) trigger');
 
-% Level 3, trigger (c): IRMA in >=1 quadrant
+% Level 3, trigger (c): IRMA in >=1 quadrant (explicit input)
 info = baseInfo; info.irmaQuadrants = 1;
 [g, ev] = assignClinicalGrade(false(H,W), q, info);
 assert(g == 3, sprintf('Level 3(c) case: got %d', g));
 assert(any(contains(ev, '"1"')), 'Level 3(c) case: evidence should cite the "1" (IRMA) trigger');
 
-% Level 4: neovascularization
-info = baseInfo; info.neovascularization = true;
-[g, ~] = assignClinicalGrade(false(H,W), q, info);
+% Level 4: NV screening proxy positive (PROXY status, never "diagnosis")
+info = baseInfo; info.neovascularization = true; info.neovascularizationStatus = 'PROXY_POSITIVE';
+[g, ev, rep4] = assignClinicalGrade(false(H,W), q, info);
 assert(g == 4, sprintf('Level 4 case: got %d', g));
+assert(strcmp(rep4.status,'PROXY'), 'NV-positive must be status PROXY');
+assert(any(contains(ev, 'PROXY')), 'NV evidence must say PROXY, never diagnostic language');
+assert(~any(contains(ev, 'Proliferative DR criterion')), 'NV evidence must not claim a diagnostic criterion');
+end
+
+% ------------------------------------------------------------------
+function localTestClinicalGradeInsufficient()
+% Production-shape input (no VB/IRMA/vitreous statuses, as the pipeline
+% supplies): must yield INSUFFICIENT_EVIDENCE + NaN, never 0/1/2.
+H = 60; W = 60;
+q = zeros(H,W,'uint8');
+q(1:30,1:30)=1; q(1:30,31:60)=2; q(31:60,1:30)=3; q(31:60,31:60)=4;
+prodInfo = struct('maPresent', true, 'exudatePresent', false, 'venousBeadingQuadrants', 0, ...
+                  'irmaQuadrants', 0, 'neovascularization', false, 'vitreousHemorrhage', false);
+[g, ev, rep] = assignClinicalGrade(false(H,W), q, prodInfo);
+assert(isnan(g), sprintf('production-shape input must give NaN grade, got %d', g));
+assert(strcmp(rep.status,'INSUFFICIENT_EVIDENCE'), 'missing VB/IRMA/vitreous must be INSUFFICIENT_EVIDENCE');
+assert(any(contains(ev, 'INCOMPLETE')), 'evidence must state the determination is incomplete');
 end
 
 % ------------------------------------------------------------------
 function mask = localSparseBlobs(H, W, rowOffset, colOffset, count)
-% Places `count` isolated (non-8-connected) single-pixel blobs on a
-% stride-3 grid inside a block starting at (rowOffset, colOffset) - used
-% only to build synthetic test input for localTestClinicalGradeRules, so
-% that bwlabel counts exactly `count` distinct connected components (the
-% stride of 3 leaves a 2-pixel gap between any two blobs in every
-% direction, well clear of 8-connectivity).
+% Places `count` isolated BxB blocks (B=3, 9px each, stride 5) inside a
+% block starting at (rowOffset, colOffset) - used only to build synthetic
+% test input for localTestClinicalGradeRules, so that bwconncomp(.,8)
+% counts exactly `count` distinct components AND the canonical >=6px
+% speckle filter keeps every one (1px dots must never fire the "4"
+% trigger - a stride-5 gap keeps blocks 8-disconnected in all directions).
 mask = false(H, W);
-span = 0:3:(3*(ceil(sqrt(count))+2));
+B = 3; stride = 5;
+span = 0:stride:(stride*(ceil(sqrt(count))+2));
 placed = 0;
 for r = rowOffset + span
     for c = colOffset + span
-        if r <= H && c <= W
-            mask(r,c) = true;
+        if r+B-1 <= H && c+B-1 <= W
+            mask(r:r+B-1, c:c+B-1) = true;
             placed = placed + 1;
             if placed >= count
                 return;
@@ -263,18 +291,29 @@ end
 
 % ------------------------------------------------------------------
 function localTestTortuosityOrdering()
+% TRUTH-TABLE / ORDERING test on synthetic vessels (not clinical
+% validation): straight segments must score lower than a tortuous tangle.
+% Canvases carry realistic vessel density (8 radial segments, frac >0.5%)
+% so the NV mask-usability gate passes - a 7px single path would be
+% INVALID input, not a valid negative.
 odCenter = [50 50]; odRadius = 5;
+straightCanvas = false(100,100);
+for k = 0:7
+    ang = k * pi/4 + pi/8;
+    r0 = [round(50+6*sin(ang)), round(50+6*cos(ang))]; % ring roots (disjoint, no shared pixels)
+    steps = repmat([round(sin(ang)), round(cos(ang))], 8, 1);
+    steps(steps == 0) = 1; % keep 8-connected outward march (|d|<=1, nonzero drift)
+    straightCanvas = straightCanvas | localDrawPath(100, 100, r0, steps);
+end
+[~, straightTort, ~, straightRep] = detectNeovascularization(straightCanvas, odCenter, odRadius);
+assert(strcmp(straightRep.status,'NOT_DETECTED'), sprintf('dense straight vessels must be assessable, got %s', straightRep.status));
 
-straightSteps = [zeros(6,1), ones(6,1)]; % 6 steps, purely horizontal - always 8-connected, always exactly straight
-straightCanvas = localDrawPath(100, 100, [50 56], straightSteps);
-[~, straightTort, ~] = detectNeovascularization(straightCanvas, odCenter, odRadius);
-
-zigzagSteps = [0 1; -1 1; 0 1; 1 1; 0 1; -1 1]; % 6 steps, alternating up/right/down/right - always 8-connected (|drow|<=1, |dcol|=1 every step), genuinely non-straight
-tortuousCanvas = localDrawPath(100, 100, [50 56], zigzagSteps);
+zigzag = [0 1; -1 1; 0 1; 1 1; 0 1; -1 1; 0 1; 1 1; 0 1; -1 1; 0 1; 1 1];
+tortuousCanvas = straightCanvas | localDrawPath(100, 100, [50 56], zigzag);
 [~, tortuousTort, ~] = detectNeovascularization(tortuousCanvas, odCenter, odRadius);
 
-assert(straightTort < 1.15, sprintf('straight synthetic segment should score close to 1.0, got %.3f', straightTort));
-assert(tortuousTort > straightTort, sprintf('tortuous segment (%.3f) should score higher than straight (%.3f)', tortuousTort, straightTort));
+assert(straightTort < 1.15, sprintf('straight synthetic vessels should score close to 1.0, got %.3f', straightTort));
+assert(tortuousTort > straightTort, sprintf('tortuous tangle (%.3f) should score higher than straight (%.3f)', tortuousTort, straightTort));
 end
 
 % ------------------------------------------------------------------

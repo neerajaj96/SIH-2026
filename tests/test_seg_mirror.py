@@ -170,4 +170,9 @@ def test_config_parity_single_source_of_truth():
     assert "splitEachLabel_manual" not in train  # old splitter must stay removed
     assert "buildSegmentationFileLists" in train and "splitSegmentationDataset" in train
     pipe = open(os.path.join(root, "runScreeningPipeline.m")).read()
-    assert "'nearest'" in pipe  # fusion mask interp fix must stay
+    # Fusion interp fix (masks nearest) now lives in the single canonical
+    # builder + gradingConfig (Stage-4 unification); the pipeline must
+    # consume the builder rather than inlining its own resize.
+    assert "buildGradingFusionTensor" in pipe  # pipeline uses canonical fusion
+    gcfg = open(os.path.join(root, "gradingConfig.m")).read()
+    assert "'nearest'" in gcfg and "'bilinear'" in gcfg  # interp frozen in config

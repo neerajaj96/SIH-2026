@@ -36,8 +36,12 @@ function r = runScreeningPipeline(rawImage, models)
 %   vesselMask, maheMask, exudateMask, lesionMask
 %   odCenter, odRadius, foveaCenter, quadrantMask
 %   nvFlagged, nvTortuosity, nvDensity
-%   ruleGrade, evidence           - clinical rule engine (always computed,
-%                                   even in simulated mode - see assignClinicalGrade.m)
+%   ruleGrade, evidence           - clinical rule engine (NaN + status
+%                                   INSUFFICIENT_EVIDENCE when VB/IRMA/
+%                                   vitreous evidence is UNAVAILABLE; see
+%                                   assignClinicalGrade.m - never a
+%                                   fabricated 0-4)
+%   ruleStatus, ruleTrigger      - evidence sufficiency + fired trigger
 %   haveTrainedModels
 %   dlGrade, confidence, scoreMap, gradCamOnDisc  - NaN/empty if simulated
 %   temperatureT, temperatureCalibrated, temperatureSource - the APPLIED
@@ -52,8 +56,10 @@ r = struct('status','ok','errorMessage','', 'focus',NaN,'entropy',NaN,'roiPassed
     'enhancedRGB',[],'enhancedGray',[],'roiMask',[], ...
     'vesselMask',[],'maheMask',[],'exudateMask',[],'lesionMask',[], ...
     'odCenter',[],'odRadius',NaN,'foveaCenter',[],'quadrantMask',[], ...
-    'nvFlagged',false,'nvTortuosity',NaN,'nvDensity',NaN, ...
-    'ruleGrade',NaN,'evidence',{{}}, 'haveTrainedModels',false, ...
+    'odValidity','UNRELIABLE','foveaValidity','UNRELIABLE','quadrantValid','INVALID','landmarkMethod','', ...
+    'nvFlagged',false,'nvTortuosity',NaN,'nvDensity',NaN,'nvStatus','UNAVAILABLE', ...
+    'ruleGrade',NaN,'evidence',{{}}, 'ruleStatus','INSUFFICIENT_EVIDENCE','ruleTrigger','unevaluated', ...
+    'haveTrainedModels',false, ...
     'dlGrade',NaN,'confidence',NaN,'scoreMap',[],'gradCamOnDisc',false, ...
     'temperatureT',NaN,'temperatureCalibrated',false,'temperatureSource','simulated (no trained models)');
 
@@ -111,18 +117,35 @@ try
     lesionMask = maheMask | exudateMask;
     r.vesselMask = vesselMask; r.maheMask = maheMask; r.exudateMask = exudateMask; r.lesionMask = lesionMask;
 
-    [odCenter, odRadius, foveaCenter] = localizeOpticDiscFovea(rawImage, roiMask, vesselMask);
-    quadrantMask = partitionQuadrants(size(roiMask), foveaCenter, odCenter);
+    [odCenter, odRadius, foveaCenter, lmStatus] = localizeOpticDiscFovea(rawImage, roiMask, vesselMask);
+    [quadrantMask, qValid] = partitionQuadrants(size(roiMask), foveaCenter, odCenter, lmStatus.odValidity, lmStatus.foveaValidity);
     r.odCenter = odCenter; r.odRadius = odRadius; r.foveaCenter = foveaCenter; r.quadrantMask = quadrantMask;
+    r.odValidity = lmStatus.odValidity; r.foveaValidity = lmStatus.foveaValidity;
+    r.quadrantValid = qValid; r.landmarkMethod = [lmStatus.odMethod ' // ' lmStatus.foveaMethod];
 
-    [nvFlagged, nvTort, nvDens] = detectNeovascularization(vesselMask, odCenter, odRadius);
+    [nvFlagged, nvTort, nvDens, nvReport] = detectNeovascularization(vesselMask, odCenter, odRadius);
     r.nvFlagged = nvFlagged; r.nvTortuosity = nvTort; r.nvDensity = nvDens;
+    r.nvStatus = nvReport.status;
 
     clinInfo = struct('maPresent', any(maheMask(:)), 'exudatePresent', any(exudateMask(:)), ...
         'venousBeadingQuadrants', 0, 'irmaQuadrants', 0, ...
-        'neovascularization', nvFlagged, 'vitreousHemorrhage', false);
-    [ruleGrade, evidence] = assignClinicalGrade(maheMask, quadrantMask, clinInfo);
-    r.ruleGrade = ruleGrade; r.evidence = evidence;
+        'neovascularization', nvFlagged, 'neovascularizationStatus', nvReport.status, ...
+        'vitreousHemorrhage', false);
+    % VB/IRMA/vitreous carry NO status fields here: no detectors exist, so
+    % the engine marks them UNAVAILABLE (never zero) and returns
+    % INSUFFICIENT_EVIDENCE + NaN unless assessable evidence fires.
+    % INVALID quadrant geometry blocks 4-2-1 reasoning (never silently
+    % use frame-center geometry). NV screening still runs (it degrades to
+    % INVALID itself on unusable geometry rather than false-negative).
+    if strcmp(qValid, 'INVALID')
+        r.ruleGrade = NaN;
+        r.evidence = {'Quadrant geometry INVALID (landmarks unreliable and fallback not permitted) - 4-2-1 reasoning blocked.'};
+        r.ruleStatus = 'INSUFFICIENT_EVIDENCE'; r.ruleTrigger = 'invalid-quadrants';
+    else
+        [ruleGrade, evidence, ruleReport] = assignClinicalGrade(maheMask, quadrantMask, clinInfo);
+        r.ruleGrade = ruleGrade; r.evidence = evidence;
+        r.ruleStatus = ruleReport.status; r.ruleTrigger = ruleReport.trigger;
+    end
 
     if r.haveTrainedModels
         % Single canonical fusion implementation (same builder training

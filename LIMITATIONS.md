@@ -8,10 +8,13 @@ documented but couldn't find.
 
 ## Not automated at all
 - **Venous beading and IRMA** (2 of the 3 "4-2-1" Severe-NPDR triggers)
-  have no detector. `assignClinicalGrade.m` accepts manual counts for
-  both and defaults to 0 if not supplied. The "4" (quadrant hemorrhage
-  count) and neovascularization criteria are the only two of the four
-  ICDR triggers this pipeline assesses end to end today.
+  have no detector (`assessVenousBeading.m` / `assessIRMA.m` are
+  extension-point stubs, status UNAVAILABLE). The rule engine treats
+  both as unevaluable: with them (and vitreous) unassessed it returns
+  INSUFFICIENT_EVIDENCE + NaN instead of a 0–4 grade. Definitive
+  Level 0/1/2 rule grades are therefore impossible in this release;
+  only the merged-MA/HE "4" trigger and the NV screening proxy can
+  fire end to end, and both carry explicit provenance/limitation labels.
 
 ## Screening aids, not validated detectors
 - **Neovascularization** (`detectNeovascularization.m`) is explicitly a
@@ -25,6 +28,9 @@ documented but couldn't find.
   That is a sanity check, not validation: no mean/median/95th-percentile
   localization error has been computed against expert-annotated
   coordinates across multiple patients, cameras, or image qualities.
+  Localizer now reports CONFIDENT/FALLBACK/UNRELIABLE validity (guessed
+  OD radius and frame-center fovea are explicit FALLBACKs); INVALID
+  geometry blocks quadrant reasoning instead of silently grading.
 
 ## Depends on what actually downloaded
 - The validation story is genuinely different depending on whether DDR

@@ -148,7 +148,7 @@ if haveTrainedModels
                  'warning sign the prediction may be spurious, not evidence-based. Treat this case with extra scrutiny.'], ...
                 predictedClass);
     end
-    if predictedClass ~= clinicalGrade
+    if ~isnan(clinicalGrade) && predictedClass ~= clinicalGrade
         warning(['Deep-learning grade (Level %d) and rule-based clinical grade (Level %d) DISAGREE. ' ...
                  'This is exactly the kind of case the original design doc''s "flag as spurious" idea ' ...
                  'was meant to catch - have a human look at this one first.'], predictedClass, clinicalGrade);
@@ -218,7 +218,12 @@ if haveReportGen
             r.qualityDecision, focus, focusThresh, ent, entropyThresh, ternary(r.qualityCalibrated, '', ' - UNCALIBRATED PLACEHOLDER, see calibrateQualityThresholds.m'))));
 
         add(rpt, Chapter('Title', 'Rule-Based Clinical Grade (ICDR 4-2-1 criteria)'));
-        add(rpt, Paragraph(sprintf('Clinical-criteria grade: Level %d (%s)', clinicalGrade, classNames(clinicalGrade+1))));
+        if isnan(clinicalGrade)
+            add(rpt, Paragraph(sprintf(['Clinical-criteria grade: INSUFFICIENT_EVIDENCE (no definitive 0-4 rule grade asserted; status %s). ' ...
+                'See evidence below for what was assessed vs unavailable.'], r.ruleStatus)));
+        else
+            add(rpt, Paragraph(sprintf('Clinical-criteria grade: Level %d (%s)', clinicalGrade, classNames(clinicalGrade+1))));
+        end
         for i = 1:numel(clinicalEvidence)
             add(rpt, Paragraph(['- ' clinicalEvidence{i}]));
         end
@@ -227,7 +232,7 @@ if haveReportGen
         end
         add(rpt, Paragraph(sprintf('Neovascularization screen: %s (tortuosity=%.2f, density=%.4f - see detectNeovascularization.m; this is a screening flag, not a diagnosis)', ...
             ternary(nvFlagged, 'FLAGGED for review', 'not flagged'), nvTortuosity, nvDensity)));
-        if haveTrainedModels && predictedClass ~= clinicalGrade
+        if haveTrainedModels && ~isnan(clinicalGrade) && predictedClass ~= clinicalGrade
             add(rpt, Paragraph(sprintf('NOTE: deep-learning grade (Level %d) and rule-based grade (Level %d) disagree - recommend manual review.', predictedClass, clinicalGrade)));
         end
         if haveTrainedModels && gradCamOnDisc
@@ -278,7 +283,11 @@ if ~reportProducedAsPdf
         r.qualityDecision, focus, focusThresh, ent, entropyThresh, ternary(r.qualityCalibrated, '', ' - UNCALIBRATED PLACEHOLDER, see calibrateQualityThresholds.m'));
 
     fprintf(fid, '-- RULE-BASED CLINICAL GRADE (ICDR 4-2-1 criteria) --\n');
-    fprintf(fid, 'Clinical-criteria grade: Level %d (%s)\n', clinicalGrade, classNames(clinicalGrade+1));
+    if isnan(clinicalGrade)
+        fprintf(fid, 'Clinical-criteria grade: INSUFFICIENT_EVIDENCE (status %s; no definitive 0-4 rule grade asserted).\n', r.ruleStatus);
+    else
+        fprintf(fid, 'Clinical-criteria grade: Level %d (%s)\n', clinicalGrade, classNames(clinicalGrade+1));
+    end
     for i = 1:numel(clinicalEvidence)
         fprintf(fid, '  - %s\n', clinicalEvidence{i});
     end
@@ -287,7 +296,7 @@ if ~reportProducedAsPdf
     end
     fprintf(fid, 'Neovascularization screen: %s (tortuosity=%.2f, density=%.4f - screening flag, not a diagnosis)\n', ...
         ternary(nvFlagged, 'FLAGGED for review', 'not flagged'), nvTortuosity, nvDensity);
-    if haveTrainedModels && predictedClass ~= clinicalGrade
+    if haveTrainedModels && ~isnan(clinicalGrade) && predictedClass ~= clinicalGrade
         fprintf(fid, 'NOTE: deep-learning grade (Level %d) and rule-based grade (Level %d) disagree - recommend manual review.\n', predictedClass, clinicalGrade);
     end
     if haveTrainedModels && gradCamOnDisc

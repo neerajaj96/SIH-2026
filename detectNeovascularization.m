@@ -1,10 +1,11 @@
-function [isFlagged, tortuosityScore, densityScore] = detectNeovascularization(vesselMask, odCenter, odRadius)
+function [isFlagged, tortuosityScore, densityScore, nvReport] = detectNeovascularization(vesselMask, odCenter, odRadius)
 % detectNeovascularization: A SCREENING PROXY, not a diagnosis - and not
 % pixel-level neovascularization segmentation, which the official PS asks
 % for and which remains a genuinely hard, actively-researched problem
 % even in the published literature (not just this codebase). Say that
 % out loud in your pitch rather than letting a judge assume this is a
-% validated NVD/NVE detector.
+% validated NVD/NVE detector. Every evidence string this produces says
+% PROXY; no consumer may present it as a diagnostic criterion.
 %
 % Flags regions of unusually dense, tortuous vasculature near the optic
 % disc (new vessels on the disc, NVD, is the more common and more
@@ -23,25 +24,56 @@ function [isFlagged, tortuosityScore, densityScore] = detectNeovascularization(v
 % segment mimicking a neovascular frond scores ~2.08 - the metric
 % separates them the way it's supposed to.
 %
+% MASK-USABILITY GATE: sparse/empty vessel masks carry no information -
+% they yield status INVALID (isFlagged=false, scores NaN), NOT
+% "not detected". A sparse mask that still flagged would be noise
+% calling itself evidence.
+%
 % INPUTS:
 %   vesselMask - logical vessel mask from the trained vessel U-Net
-%   odCenter   - [x y] from localizeOpticDiscFovea.m
+%   odCenter   - [x y] from localizeOpticDiscFovea.m (NaN => INVALID)
 %   odRadius   - optic disc radius (pixels) from localizeOpticDiscFovea.m
 %
 % OUTPUTS:
 %   isFlagged       - true if the peridiscal region's density AND
-%                     tortuosity both exceed threshold - a "flag for
-%                     manual review", not a diagnosis
+%                     tortuosity both exceed the CONFIGURED thresholds -
+%                     a "flag for manual review", not a diagnosis
 %   tortuosityScore - mean arc/chord ratio of vessel segments in the
-%                     peridiscal region
+%                     peridiscal region (NaN when INVALID)
 %   densityScore    - local vessel-pixel density in the peridiscal region
+%                     (NaN when INVALID)
+%   nvReport        - struct(status, tortuosity, density, wholeImageDensity,
+%                     nSegments, vesselFrac, provenance): status is one of
+%                     PROXY_POSITIVE | NOT_DETECTED (proxy-negative) |
+%                     INVALID (unusable input)
 %
-% Requires: Image Processing Toolbox. Uses bwskel; if your release
-% predates it, replace with bwmorph(vesselMask,'skel',Inf).
+% Thresholds live in clinicalConfig.m. Requires: Image Processing
+% Toolbox. Uses bwskel; if your release predates it, replace with
+% bwmorph(vesselMask,'skel',Inf).
+
+ccfg = clinicalConfig();
+vesselMask = logical(vesselMask);
+
+% --- Usability gate 1: geometry ---
+if any(isnan(odCenter(:))) || ~isfinite(odRadius) || odRadius <= 0
+    [isFlagged, tortuosityScore, densityScore] = deal(false, NaN, NaN);
+    nvReport = localReport('INVALID', NaN, NaN, NaN, 0, 0, ...
+        'unusable OD geometry (NaN/nonpositive radius) - peridiscal zone undefined', ccfg);
+    return;
+end
+
+% --- Usability gate 2: vessel content ---
+vesselFrac = sum(vesselMask(:)) / max(numel(vesselMask), 1);
+if vesselFrac < ccfg.nvMinVesselFrac
+    [isFlagged, tortuosityScore, densityScore] = deal(false, NaN, NaN);
+    nvReport = localReport('INVALID', NaN, NaN, vesselFrac, 0, vesselFrac, ...
+        sprintf('sparse/empty vessel mask (frac %.4f < %.4f) - no information', vesselFrac, ccfg.nvMinVesselFrac), ccfg);
+    return;
+end
 
 [H, W] = size(vesselMask);
 [xx, yy] = meshgrid(1:W, 1:H);
-peridiscal = hypot(xx-odCenter(1), yy-odCenter(2)) < 2.5*odRadius; % NVD's classic search zone
+peridiscal = hypot(xx-odCenter(1), yy-odCenter(2)) < ccfg.nvSearchRadii*odRadius; % NVD's classic search zone (radii from config)
 
 try
     skel = bwskel(vesselMask);
@@ -84,19 +116,37 @@ else
 end
 densityScore = sum(vesselMask(peridiscal)) / max(sum(peridiscal(:)), 1);
 
-% Self-relative thresholds: compare the peridiscal patch against the rest
-% of THIS SAME image's vasculature, since absolute pixel thresholds don't
-% transfer across camera resolution/magnification. The 1.2x tortuosity
-% cutoff was set after testing this exact function against synthetic
-% normal-vessel vs. tortuous-tangle masks: after fixing a branch-point
-% bug (see above), ordinary radiating vessels scored ~1.05-1.1 and a
-% deliberately tortuous synthetic tangle scored ~1.37, so 1.2 sits
-% between them. That is still calibration against SYNTHETIC data, not
-% clinically validated - tune both cutoffs against real labeled NVD/NVE
-% examples if you get access to any (IDRiD has some annotations for this)
-% before trusting this for anything beyond a rough screening flag.
+% Usability gate 3: too few measurable peridiscal segments - a tortuosity
+% mean over 0-2 fragments is noise, not evidence.
+nSegments = numel(tortRatios);
+if nSegments < ccfg.nvMinSegments
+    [isFlagged, tortuosityScore, densityScore] = deal(false, NaN, NaN);
+    nvReport = localReport('INVALID', NaN, NaN, vesselFrac, nSegments, vesselFrac, ...
+        sprintf('only %d measurable peridiscal segment(s) (< %d) - tortuosity mean unreliable', nSegments, ccfg.nvMinSegments), ccfg);
+    return;
+end
+
+% Self-relative thresholds from clinicalConfig (cutoffs synthetic-reasoned,
+% NOT clinically validated - tune against real labeled NVD/NVE examples
+% such as IDRiD annotations before trusting beyond a screening flag).
 wholeImageDensity = sum(vesselMask(:)) / numel(vesselMask);
-isFlagged = (tortuosityScore > 1.2) && (densityScore > 2 * wholeImageDensity);
+isFlagged = (tortuosityScore > ccfg.nvTortuosityCutoff) && (densityScore > ccfg.nvDensityRatio * wholeImageDensity);
+if isFlagged
+    status = 'PROXY_POSITIVE';
+    prov = 'peridiscal density+tortuosity above configured cutoffs (PROXY screening flag, NOT a diagnosis)';
+else
+    status = 'NOT_DETECTED';
+    prov = 'proxy-negative: cutoffs not met (a proxy negative, never a verified absence of NV)';
+end
+nvReport = localReport(status, tortuosityScore, densityScore, wholeImageDensity, nSegments, vesselFrac, prov, ccfg);
+end
+
+function rep = localReport(status, tort, dens, wholeDens, nSeg, vFrac, provenance, ccfg)
+rep = struct('status', status, 'tortuosity', tort, 'density', dens, ...
+    'wholeImageDensity', wholeDens, 'nSegments', nSeg, 'vesselFrac', vFrac, ...
+    'cutoffs', struct('tortuosity', ccfg.nvTortuosityCutoff, 'densityRatio', ccfg.nvDensityRatio, ...
+        'searchRadii', ccfg.nvSearchRadii, 'minVesselFrac', ccfg.nvMinVesselFrac, 'minSegments', ccfg.nvMinSegments), ...
+    'provenance', provenance, 'configVersion', ccfg.version);
 end
 
 % ------------------------------------------------------------------

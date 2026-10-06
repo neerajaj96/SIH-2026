@@ -1,4 +1,4 @@
-function [odCenter, odRadius, foveaCenter] = localizeOpticDiscFovea(rawImage, roiMask, vesselMask)
+function [odCenter, odRadius, foveaCenter, lmStatus] = localizeOpticDiscFovea(rawImage, roiMask, vesselMask)
 % localizeOpticDiscFovea: Locates the optic disc and fovea - two of the
 % six structures the official PS asks for in Module 2 that neither the
 % original blueprint nor the first round of fixes touched at all.
@@ -18,10 +18,22 @@ function [odCenter, odRadius, foveaCenter] = localizeOpticDiscFovea(rawImage, ro
 % against this project's actual sample.jpg - both landmarks landed
 % visually correct (OD on the vessel-convergence bright spot, fovea on
 % the dark foveal pit, 2.17 disc diameters away, right in the literature's
-% expected 2-2.5 range). Translation, not a blind first attempt.
+% expected 2–2.5 range). Translation, not a blind first attempt.
+%
+% VALIDITY STATES (4th output, additive - first three unchanged):
+%   odValidity / foveaValidity: 'CONFIDENT' | 'FALLBACK' | 'UNRELIABLE'.
+%   The old silent radius guess (0.08*frame) is now an explicit FALLBACK;
+%   the old silent fovea frame-center fallback is likewise explicit.
+%   Downstream quadrant reasoning must honor clinicalConfig fallback
+%   policy (FALLBACK usable only if explicitly permitted).
 %
 % INPUTS:
-%   rawImage   - RGB fundus image (uint8)
+%   rawImage   - RGB fundus image (uint8). Canonical Stage-1 ENHANCED
+%                green channel is intentionally NOT used here: brightness
+%                ranking must see the original illumination falloff
+%                (CLAHE flattens exactly the bright-disc cue this method
+%                keys on). Documented illumination-bias choice, not an
+%                oversight - see stage-4 handoff.
 %   roiMask    - logical fundus-circle mask from assessAndEnhanceImage.m
 %   vesselMask - (optional) logical vessel mask from the trained vessel
 %                U-Net. If omitted, a crude background-subtracted-green-
@@ -31,8 +43,12 @@ function [odCenter, odRadius, foveaCenter] = localizeOpticDiscFovea(rawImage, ro
 %
 % OUTPUTS:
 %   odCenter    - [x y] pixel coordinates of the optic disc center
-%   odRadius    - estimated optic disc radius, in pixels
-%   foveaCenter - [x y] pixel coordinates of the fovea
+%   odRadius    - estimated optic disc radius, in pixels (FALLBACK guess
+%                 when no bright blob found - see lmStatus, never silent)
+%   foveaCenter - [x y] pixel coordinates of the fovea (frame center
+%                 FALLBACK when no candidate - see lmStatus)
+%   lmStatus    - struct(odValidity, foveaValidity, odMethod,
+%                 foveaMethod, odFoveaDistDiam)
 %
 % Requires: Image Processing Toolbox
 
@@ -42,6 +58,17 @@ if nargin < 3 || isempty(vesselMask)
     vesselness = max(background - green, 0);
     vesselness(~roiMask) = 0;
     vesselMask = vesselness > prctile(vesselness(roiMask), 90);
+end
+
+ccfg = clinicalConfig();
+if ~any(roiMask(:))
+    % Empty ROI: no anatomy to localize - explicit UNRELIABLE, NaN
+    % geometry (callers must block quadrant reasoning, never use it).
+    odCenter = [NaN NaN]; odRadius = NaN; foveaCenter = [NaN NaN];
+    lmStatus = struct('odValidity', 'UNRELIABLE', 'foveaValidity', 'UNRELIABLE', ...
+        'odMethod', 'UNRELIABLE (empty ROI)', 'foveaMethod', 'UNRELIABLE (empty ROI)', ...
+        'odFoveaDistDiam', NaN);
+    return;
 end
 
 % --- Optic disc: z-scored brightness + z-scored local vessel density ---
@@ -61,17 +88,22 @@ brightBlobs = bwlabel(brightness > prctile(brightness(roiMask), 97));
 thisLabel = brightBlobs(odY, odX);
 if thisLabel > 0
     odRadius = sqrt(sum(brightBlobs(:) == thisLabel) / pi);
+    odValidity = 'CONFIDENT';
+    odMethod = 'brightness+vessel-convergence peak inside bright blob';
 else
-    odRadius = 0.08 * min(size(roiMask)); % fallback: typical OD size as a fraction of frame
+    odRadius = ccfg.odRadiusFallbackFrac * min(size(roiMask)); % explicit FALLBACK (was silent): typical OD size as a fraction of frame
+    odValidity = 'FALLBACK';
+    odMethod = 'FALLBACK radius 0.08*frame (no bright blob at convergence peak)';
 end
 
-% --- Fovea: darkest, least-vascular point 2-3 disc diameters away,
-%     roughly along the horizontal meridian through the disc ---
+% --- Fovea: darkest, least-vascular point in the OD-anchored band ---
+% Band geometry from clinicalConfig (radii in OD radii, after Niemeijer).
 [H, W] = size(roiMask);
 [xx, yy] = meshgrid(1:W, 1:H);
 distFromOD = hypot(xx - odX, yy - odY);
-horizontalBand = abs(yy - odY) < odRadius * 1.5;
-searchRegion = (distFromOD > 4*odRadius) & (distFromOD < 6*odRadius) & horizontalBand & roiMask;
+horizontalBand = abs(yy - odY) < odRadius * ccfg.foveaBandHalfWidthRadii;
+searchRegion = (distFromOD > ccfg.foveaSearchInnerRadii*odRadius) & ...
+    (distFromOD < ccfg.foveaSearchOuterRadii*odRadius) & horizontalBand & roiMask;
 
 darkness = -double(rawImage(:,:,2));
 darkness(~searchRegion) = -Inf;
@@ -82,9 +114,17 @@ if ~any(isfinite(darkness(:)))
              'search band (this can happen on heavily cropped or off-center captures). ' ...
              'Falling back to the frame center - inspect the image manually.']);
     foveaCenter = [W/2, H/2];
+    foveaValidity = 'FALLBACK';
+    foveaMethod = 'FALLBACK frame center (empty search band)';
 else
     [~, idx] = max(darkness(:));
     [fovY, fovX] = ind2sub(size(darkness), idx);
     foveaCenter = [fovX, fovY];
+    foveaValidity = 'CONFIDENT';
+    foveaMethod = 'darkest least-vascular point in OD-anchored band';
 end
+odFoveaDistDiam = hypot(foveaCenter(1)-odCenter(1), foveaCenter(2)-odCenter(2)) / max(2*odRadius, eps);
+lmStatus = struct('odValidity', odValidity, 'foveaValidity', foveaValidity, ...
+    'odMethod', odMethod, 'foveaMethod', foveaMethod, ...
+    'odFoveaDistDiam', odFoveaDistDiam);
 end

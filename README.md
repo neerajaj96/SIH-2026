@@ -10,7 +10,7 @@ MATLAB-first pipeline + web demo + deployment scaffolding:
 - **Quality gate:** `assessAndEnhanceImage.m`, `calibrateQualityThresholds.m`
 - **Segmentation:** `train_UNet_Segmentation.m` (3× binary U-Nets: vessels, MA/haemorrhage, exudates), `runSegmentationNet.m`, `preprocessFundusForSegmentation.m`, `evaluateSegmentation.m`, `validateMaskConventions.m`
 - **Grading:** `train_DR_Grader.m` (DenseNet-121, 5-channel RGB+vessel+lesion, softmax + hybrid CE + ordinal penalty), `train_Baseline_ResNet50.m`, `compareModels.m`, `computeQWK.m`, `calibrateTemperature.m`
-- **Clinical rule second opinion:** `assignClinicalGrade.m` (ICDR 4-2-1), `partitionQuadrants.m`, `localizeOpticDiscFovea.m`, `detectNeovascularization.m` (screening proxy only)
+- **Clinical rule second opinion:** `assignClinicalGrade.m` (status-aware ICDR 4-2-1: SUFFICIENT/INSUFFICIENT_EVIDENCE/PROXY, VB/IRMA UNAVAILABLE stubs, merged-MA/HE "4" with speckle guard), `partitionQuadrants.m` (validity-gated), `localizeOpticDiscFovea.m` (+validity/provenance), `detectNeovascularization.m` (screening proxy with usability gates)
 - **Inference:** `production_inference.m` (SIMULATED until real `.mat` weights exist), `runScreeningPipeline.m`, `runBatchScreening.m`, `screenOneImage.m`, `saveModelWithMetadata.m`, `getOrLoadCachedModels.m`, `loadModelsIfPresent.m`
 - **Data:** `datasetRegistry.m` (single source of truth), `buildGradingDatasets.m`, `buildMessidorTestSet.m`, `buildPatientLevelSplit.m`
 - **Telemed / capacity:** `buildTelemedModel.m`, `SimEvents_Telemed_Model.m`, `optimizeResourceAllocation.m`, `erlangCWaitHours.m`
