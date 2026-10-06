@@ -53,7 +53,12 @@ r.haveTrainedModels = models.haveTrainedModels;
 
 try
     qcfg = qualityConfig();
-    [isGradeable, enhancedRGB, enhancedGray, focus, ent, roiMask] = assessAndEnhanceImage(rawImage, qcfg.focusThresh, qcfg.entropyThresh);
+    % Honor calibrated qualityThresholds.mat when present (pwd convention,
+    % same as loadModelsIfPresent.m); falls back to canonical 8/3.5 with
+    % no behavior change when absent. Previously the gate ignored
+    % calibration while production_inference.m displayed calibrated values.
+    [qFocusThresh, qEntropyThresh] = qualityLoadCalibration(qcfg);
+    [isGradeable, enhancedRGB, enhancedGray, focus, ent, roiMask] = assessAndEnhanceImage(rawImage, qFocusThresh, qEntropyThresh);
     r.focus = focus; r.entropy = ent; r.roiPassed = isGradeable;
     r.enhancedRGB = enhancedRGB; r.enhancedGray = enhancedGray; r.roiMask = roiMask;
     if ~isGradeable
