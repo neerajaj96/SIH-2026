@@ -34,6 +34,12 @@ cfg.minBlobAreaPx = 6;   % matches the historical placeholder floor
 % --- Hemorrhage / MA-HE rule parameters (ICDR 4-2-1 "4") ---
 cfg.severeHemPerQuadrant = 20;  % ">20 hemorrhages in EACH of 4 quadrants"
 cfg.nQuadrants = 4;
+% Evidence source tag for the "4" count (machine-readable provenance):
+% the count derives from the MERGED MA/HE channel - there is NO true
+% MA-vs-hemorrhage separation in this release. A future dedicated
+% hemorrhage detector replaces this tag (extension point) without
+% changing the 4-2-1 contract.
+cfg.maHeSource = 'MA_HE_COMBINED';
 
 % --- VB / IRMA (UNAVAILABLE this release - extension points only) ---
 cfg.vbStatusDefault   = 'UNAVAILABLE';

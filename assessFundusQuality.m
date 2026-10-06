@@ -82,7 +82,7 @@ rawImage = im2uint8(rawImage);
 grayFull = rgb2gray(rawImage);
 roiMask = grayFull > cfg.roiSeedThresh;
 roiMask = imfill(roiMask, 'holes');
-cc = bwconncomp(roiMask);
+cc = bwconncomp(roiMask, 8); % explicit 8-connectivity (never rely on defaults)
 if cc.NumObjects > 1
     % Largest component wins: dust specks, sticker tags, and light-leak
     % corners are orders of magnitude smaller than the fundus disc.

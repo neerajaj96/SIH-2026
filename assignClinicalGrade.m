@@ -74,6 +74,8 @@ for q = 1:ccfg.nQuadrants
 end
 
 provenance = struct( ...
+    'source', ccfg.maHeSource, ...
+    'maskSource', localMaskSource(maskInfo), ...
     'hemSource', 'merged MA/HE evidence channel (no MA-vs-hemorrhage separation; NOT validated hemorrhage detection)', ...
     'hemCounts', quadrantHemCounts, ...
     'hemThreshold', ccfg.severeHemPerQuadrant, ...
@@ -165,7 +167,7 @@ if localHas(maskInfo, 'maPresent')
     return;
 end
 icdrGrade = 0;
-evidence{end+1} = 'No DR abnormalities in any assessed evidence channel (MA/HE, exudates, NV proxy, VB, IRMA, vitreous all assessable and negative).';
+evidence{end+1} = 'No abnormalities detected in any assessed evidence channel (MA/HE, exudates, NV proxy, VB, IRMA, vitreous all assessable and negative).';
 ruleReport = localReport(ccfg.statusSufficient, 0, evidence, provenance, 'none', vbStatus, irmaStatus, nvStatus, vitStatus);
 end
 
@@ -219,6 +221,17 @@ end
 
 function v = localHas(info, field)
 v = isfield(info, field) && any(info.(field)(:));
+end
+
+function s = localMaskSource(info)
+% Which mask fed the counts: 'trained' | 'placeholder' | 'unspecified'.
+% The engine cannot verify mask origin pixel-wise; callers that know
+% (runScreeningPipeline does) should pass maskSource explicitly.
+if isfield(info, 'maskSource') && ~isempty(info.maskSource)
+    s = info.maskSource;
+else
+    s = 'unspecified';
+end
 end
 
 function rep = localReport(status, grade, evidence, provenance, trigger, vbS, irmaS, nvS, vitS)

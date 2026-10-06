@@ -84,10 +84,16 @@ odScore(~roiMask) = -Inf;
 [odY, odX] = ind2sub(size(odScore), idx);
 odCenter = [odX, odY];
 
-brightBlobs = bwlabel(brightness > prctile(brightness(roiMask), 97));
-thisLabel = brightBlobs(odY, odX);
+brightBlobs = bwconncomp(brightness > prctile(brightness(roiMask), 97), 8);
+thisLabel = 0;
+for k = 1:brightBlobs.NumObjects
+    if any(brightBlobs.PixelIdxList{k} == sub2ind(size(roiMask), odY, odX))
+        thisLabel = k;
+        break;
+    end
+end
 if thisLabel > 0
-    odRadius = sqrt(sum(brightBlobs(:) == thisLabel) / pi);
+    odRadius = sqrt(numel(brightBlobs.PixelIdxList{thisLabel}) / pi);
     odValidity = 'CONFIDENT';
     odMethod = 'brightness+vessel-convergence peak inside bright blob';
 else

@@ -20,8 +20,10 @@ function results = evaluateClinicalRule(imagePaths, grades, varargin)
 %
 % OUTPUT: results struct (empty .metrics when nothing assessable):
 %   .n, .nSufficient, .nInsufficient, .confusion (5x5 on sufficient only),
-%   .accuracySufficient, .referableSens/Spec (rule vs label, sufficient
-%   only), .dlAgreeRate, .manifestCsv. All NaN/empty when nSufficient==0.
+%   .accuracySufficient + .accuracyCI, .referableSens/Spec +
+%   .referableSensCI/.referableSpecCI (Wilson 95% via
+%   wilsonScoreInterval), .dlAgreeRate, .manifestCsv. All NaN/empty when
+%   nSufficient==0.
 
 p = inputParser;
 addParameter(p, 'Models', [], @(x) true);
@@ -64,8 +66,14 @@ end
 refTrue = lb >= 2; refPred = rg >= 2;
 results.confusion = conf;
 results.accuracySufficient = sum(rg == lb) / numel(lb);
+[accLo, accHi] = wilsonScoreInterval(sum(rg == lb), numel(lb));
+results.accuracyCI = [accLo, accHi];
 results.referableSens = sum(refPred & refTrue) / max(sum(refTrue), 1);
+[senLo, senHi] = wilsonScoreInterval(sum(refPred & refTrue), max(sum(refTrue), 1));
+results.referableSensCI = [senLo, senHi];
 results.referableSpec = sum(~refPred & ~refTrue) / max(sum(~refTrue), 1);
+[spLo, spHi] = wilsonScoreInterval(sum(~refPred & ~refTrue), max(sum(~refTrue), 1));
+results.referableSpecCI = [spLo, spHi];
 dlSuff = dlGrade(suff);
 bothGraded = ~isnan(dlSuff);
 results.dlAgreeRate = sum(dlSuff(bothGraded) == rg(bothGraded)) / max(sum(bothGraded), 1);
@@ -75,7 +83,9 @@ manifest = table(imagePaths(:), grades(:), ruleGrade, ruleStatus, dlGrade, ...
 manifestCsv = fullfile(p.Results.OutputDir, sprintf('clinical_rule_eval_%s.csv', datestr(now,'yyyymmdd_HHMMSS')));
 writetable(manifest, manifestCsv);
 results.manifestCsv = manifestCsv;
-fprintf('Clinical-rule eval: n=%d sufficient=%d insufficient=%d accuracy(sufficient)=%.3f referable sens=%.3f spec=%.3f dlAgree=%.3f\n', ...
+fprintf('Clinical-rule eval: n=%d sufficient=%d insufficient=%d accuracy(sufficient)=%.3f [%.3f,%.3f] referable sens=%.3f [%.3f,%.3f] spec=%.3f [%.3f,%.3f] dlAgree=%.3f\n', ...
     n, results.nSufficient, results.nInsufficient, results.accuracySufficient, ...
-    results.referableSens, results.referableSpec, results.dlAgreeRate);
+    results.accuracyCI(1), results.accuracyCI(2), ...
+    results.referableSens, results.referableSensCI(1), results.referableSensCI(2), ...
+    results.referableSpec, results.referableSpecCI(1), results.referableSpecCI(2), results.dlAgreeRate);
 end

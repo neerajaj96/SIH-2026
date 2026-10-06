@@ -89,7 +89,7 @@ end
 % each remaining piece is a genuine unbranched vessel segment.
 branchPoints = bwmorph(skel, 'branchpoints');
 skel = skel & ~imdilate(branchPoints, strel('disk', 1));
-branches = bwconncomp(skel);
+branches = bwconncomp(skel, 8); % explicit 8-connectivity (never rely on defaults)
 
 tortRatios = [];
 for i = 1:branches.NumObjects

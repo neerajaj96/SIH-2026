@@ -17,6 +17,7 @@ nP = 0; nT = 0;
 [nP,nT] = cc(nP,nT,'NV proxy wording + INVALID gates',@cNV);
 [nP,nT] = cc(nP,nT,'landmark/quadrant validity',@cLandmark);
 [nP,nT] = cc(nP,nT,'legacy 6-output wrapper delegates',@cCompat);
+[nP,nT] = cc(nP,nT,'end-to-end pipeline propagation (simulated)',@cPipeline);
 fprintf('\n=== stage4 clinical (MATLAB, UNEXECUTED HERE): %d / %d ===\n', nP, nT);
 if nP < nT, error('testClinicalReasoning:failures','%d failed',nT-nP); end
 end
@@ -84,4 +85,23 @@ img = uint8(128*ones(48,48,3));
 rep = assessFundusQuality(img, 'FocusThresh', 8, 'EntropyThresh', 3.5, 'CalibrationDir', []);
 assert(isG == rep.legacyGradeable && isequal(eGray, rep.enhancedGray) && isequal(roi, rep.roiMask), 'wrapper/canonical diverged');
 assert(isG == (fs >= 8 && es >= 3.5), 'legacy boolean semantics broken');
+end
+
+function cPipeline()
+% End-to-end propagation in SIMULATED mode (no weights): quality decision,
+% rule status, NV status and landmark validity must all be present and
+% internally consistent - INSUFFICIENT rule state must not crash display
+% logic (NaN-safe comparisons).
+img = uint8(128*ones(96,96,3));
+[xx, yy] = meshgrid(1:96, 1:96);
+disc = (xx-48).^2 + (yy-48).^2 <= 30^2;
+for c = 1:3, ch = img(:,:,c); ch(disc) = uint8(double(ch(disc))*1.4); img(:,:,c) = ch; end
+r = runScreeningPipeline(img);
+assert(isfield(r,'ruleStatus') && isfield(r,'qualityDecision') && isfield(r,'nvStatus'), 'status fields missing');
+assert(isfield(r,'odValidity') && isfield(r,'quadrantValid') && isfield(r,'temperatureT'), 'validity/temperature fields missing');
+assert(ismember(r.qualityDecision, {'PASS','BORDERLINE','FAIL'}), 'bad quality decision enum');
+assert(ismember(r.ruleStatus, {'SUFFICIENT','INSUFFICIENT_EVIDENCE','PROXY','INVALID'}), 'bad rule status enum');
+% NaN-safe downstream pattern (mirrors production_inference guards).
+ok = isnan(r.ruleGrade) || (r.ruleGrade >= 0 && r.ruleGrade <= 4);
+assert(ok, 'rule grade out of contract');
 end

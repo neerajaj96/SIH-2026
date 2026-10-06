@@ -44,7 +44,9 @@ redesign, bridge/UI/DB/Simulink, treatment/referral logic.
 
 ## Contracts
 
-- `assignClinicalGrade` keeps `[grade, evidence]` + additive `ruleReport`;
+- `assignClinicalGrade` keeps `[grade, evidence]` + additive `ruleReport`
+  (`status/grade/evidence/trigger/provenance{source=MA_HE_COMBINED,
+  maskSource=trained|placeholder|unspecified,...}/evidenceStatus`);
   `localizeOpticDiscFovea` keeps 3 outputs + additive `lmStatus`;
   `partitionQuadrants` keeps mask + additive `qValid`;
   `detectNeovascularization` keeps 3 outputs + additive `nvReport`.
@@ -54,7 +56,10 @@ redesign, bridge/UI/DB/Simulink, treatment/referral logic.
 
 ## Tests (this workspace, Python 3.12, no MATLAB/data/weights)
 
-- `tests/test_stage4_clinical.py`: 59/59 PASS (executable above).
+- `tests/test_stage4_clinical.py`: 64/64 PASS (executable above).
+- MATLAB `testClinicalReasoning.m` incl. end-to-end pipeline propagation
+  test (UNEXECUTED here); `evaluateClinicalRule` reports Wilson CIs via
+  `wilsonScoreInterval` (no bare point estimates).
 - Prior suites must stay green (re-run at finalization).
 
 ## Stage-5 prerequisites

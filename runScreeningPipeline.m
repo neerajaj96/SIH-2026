@@ -128,9 +128,17 @@ try
     r.nvStatus = nvReport.status;
 
     clinInfo = struct('maPresent', any(maheMask(:)), 'exudatePresent', any(exudateMask(:)), ...
-        'venousBeadingQuadrants', 0, 'irmaQuadrants', 0, ...
+        'venousBeadingQuadrants', 0, 'venousBeadingStatus', 'UNAVAILABLE', ...
+        'irmaQuadrants', 0, 'irmaStatus', 'UNAVAILABLE', ...
         'neovascularization', nvFlagged, 'neovascularizationStatus', nvReport.status, ...
-        'vitreousHemorrhage', false);
+        'vitreousHemorrhage', false, 'vitreousStatus', 'UNAVAILABLE');
+    % Provenance: the engine cannot verify mask origin pixel-wise, but the
+    % pipeline knows which path produced the masks.
+    if r.haveTrainedModels
+        clinInfo.maskSource = 'trained';
+    else
+        clinInfo.maskSource = 'placeholder';
+    end
     % VB/IRMA/vitreous carry NO status fields here: no detectors exist, so
     % the engine marks them UNAVAILABLE (never zero) and returns
     % INSUFFICIENT_EVIDENCE + NaN unless assessable evidence fires.

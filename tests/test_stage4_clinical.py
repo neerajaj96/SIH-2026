@@ -102,9 +102,13 @@ def test_status_language():
           "Proliferative DR criterion" not in eng.replace("Vitreous/preretinal hemorrhage present (manual input, VERIFIED) - Proliferative DR criterion.", ""), "diagnostic overclaim")
     check("NV evidence says PROXY", "SCREENING PROXY" in eng, "proxy unlabeled")
     check("Level-0 text does not overstate",
-          "No visible DR abnormalities detected" not in eng, "overstatement")
+          "No visible DR abnormalities detected" not in eng and "No DR abnormalities" not in eng, "overstatement")
     check("MA/HE merged limitation labeled",
           "MERGED" in eng or "merged" in eng, "provenance gap")
+    check("machine-readable source MA_HE_COMBINED",
+          "MA_HE_COMBINED" in txt("clinicalConfig.m") and "maHeSource" in eng, "source tag missing")
+    check("maskSource provenance recorded",
+          "maskSource" in eng, "mask origin untracked")
     check("VB/IRMA extension stubs exist and are UNAVAILABLE",
           os.path.exists(os.path.join(ROOT, "assessVenousBeading.m")) and
           os.path.exists(os.path.join(ROOT, "assessIRMA.m")) and
@@ -221,6 +225,16 @@ def test_config_single_source():
     check("eval runner exists but claims no metrics without data",
           os.path.exists(os.path.join(ROOT, "evaluateClinicalRule.m")) and
           "no clinical metric fabricated" in txt("evaluateClinicalRule.m"), "runner gap")
+    check("eval reports Wilson CIs (no bare point estimates)",
+          "wilsonScoreInterval" in txt("evaluateClinicalRule.m"), "CI gap")
+    check("MATLAB e2e pipeline test registered (UNEXECUTED)",
+          "cPipeline" in txt("testClinicalReasoning.m"), "e2e untested")
+    check("explicit 8-connectivity everywhere it counts",
+          all("bwconncomp(" in txt(f) and "bwlabel(" not in "\n".join(
+              ln for ln in txt(f).splitlines() if not ln.strip().startswith("%"))
+              for f in ("assignClinicalGrade.m", "filterLesionComponents.m",
+                        "detectNeovascularization.m", "assessFundusQuality.m",
+                        "localizeOpticDiscFovea.m")), "connectivity drift")
 
 
 TESTS = [test_status_language, test_insufficient_policy, test_speckle_guard,
