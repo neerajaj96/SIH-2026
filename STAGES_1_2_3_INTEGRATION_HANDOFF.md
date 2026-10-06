@@ -39,12 +39,19 @@ origin-relative and is superseded here), `STAGE12_INTEGRATION_HANDOFF.md`
   `roiMask (HxW logical)`
 → `runScreeningPipeline` consumes the canonical report directly:
   exposes `qualityDecision/reasons/guidance`, effective
-  `focusThresh/entropyThresh`, `qualityCalibrated/Source`; FAIL
-  hard-rejects (`ungradeable`), BORDERLINE proceeds gradeable-with-warning
-  (decision + reasons preserved, never coerced); `screenOneImage` passes
-  fields through (additive, bridge ignores unknown keys);
-  `production_inference` reads effective values from `r` (no second load —
-  gate/report divergence structurally closed)
+  `focusThresh/entropyThresh`, `qualityCalibrated/Source`, AND the applied
+  `temperatureT` + `temperatureCalibrated/Source` (from the model cache,
+  hot-reloaded on artifact mtime — displayed T can never differ from the
+  T softmax used); FAIL hard-rejects (`ungradeable`), BORDERLINE proceeds
+  gradeable-with-warning (decision + reasons preserved, never coerced);
+  `screenOneImage` (file renamed from `screenOneImage-1.m` so MATLAB can
+  resolve the `screenOneImage` function for `bridge_server.py` /
+  `runBatchScreening`) passes fields through (additive, bridge ignores
+  unknown keys); `production_inference` reads effective values from `r`
+  (no second load — gate/report/error-message/display divergence
+  structurally closed)
+→ `auditQualityBatch` (training file-list audit: decision + reason codes
+  → CSV manifest, `audit-only` vs `enforce` policy, zero model inference)
 → Stage-2 `preprocessFundusForSegmentation` (bilinear + `single/255` →
   `[512 512]` from `segmentationConfig`) → `runSegmentationNet` per
   target (bilinear down, argmax class 2 = Foreground, nearest
@@ -106,10 +113,10 @@ No test tuning in code. All VERIFIED (static + synthetic).
 
 ## 4. Test results (executed here, Python 3.12, no MATLAB/data/weights)
 
-- `tests/test_stages123_hardening.py`: **66/66 PASS** (grading + quality
-  + chain + adversarial + release-hardening pins: BORDERLINE
-  non-coercion, single-source calibration, hot-reload, zscore/0-255,
-  validation IDs, loud failures).
+- `tests/test_stages123_hardening.py`: **81/81 PASS** (grading + quality
+  + chain + adversarial + release-hardening + audit-findings pins:
+  callable `screenOneImage.m`, single core, applied-T exposure,
+  training audit, agreement registration).
 - `tests/test_stage12_contract.py`: **49/49 PASS** (canonical core,
   single fusion builder, configs).
 - `tests/python/test_quality_mirror.py`: **20/20 PASS**.
@@ -121,9 +128,10 @@ No test tuning in code. All VERIFIED (static + synthetic).
 `runSelfTests` (14 checks), `runGradingSelfTests`,
 `testQualitySubsystem`, `testStage12Integration`, `trainnet`/resume/
 `pixelLabelDatastore`, `initialize(net)` semantics, eval/bench suites,
-PLUS new hardening surface: wrapper/canonical numeric parity run,
-builder-unified inference run, temperature hot-reload run, BORDERLINE
-end-to-end run.
+PLUS new hardening surface: wrapper/canonical numeric parity run
+(`tAgreement`), builder-unified inference run, temperature hot-reload +
+applied-T run, BORDERLINE end-to-end run, `auditQualityBatch` manifest
+run, callable `screenOneImage` bridge run.
 
 ## 6. DATA-GATED (no datasets/weights here)
 

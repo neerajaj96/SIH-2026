@@ -26,6 +26,7 @@ nPass = 0; nTot = 0;
 [nPass, nTot] = qcheck(nPass, nTot, 'calibrator math', @tCalib);
 [nPass, nTot] = qcheck(nPass, nTot, 'determinism', @tDeterminism);
 [nPass, nTot] = qcheck(nPass, nTot, 'backward compat 6-output', @tCompat);
+[nPass, nTot] = qcheck(nPass, nTot, 'wrapper/canonical agreement (same inputs)', @tAgreement);
 fprintf('\n=== quality: %d / %d passed ===\n', nPass, nTot);
 if nPass < nTot, error('testQualitySubsystem:failures', '%d failed', nTot-nPass); end
 end
@@ -98,8 +99,7 @@ a = assessFundusQuality(img); b = assessFundusQuality(img);
 assert(strcmp(a.decision,b.decision) && a.focusScore == b.focusScore && a.entropyScore == b.entropyScore, 'non-deterministic');
 end
 
-function tCompat()
-img = localFundus(128,128,45,1.0,0);
+function tCompat()img = localFundus(128,128,45,1.0,0);
 [isG, eRGB, eGray, fs, es, roi] = assessAndEnhanceImage(img, 8, 3.5);
 assert(islogical(isG) && ndims(eRGB)==3 && ismatrix(eGray) && islogical(roi), '6-output contract broken');
 assert(isequal(size(eGray), size(roi)), 'enhancedGray/roiMask size mismatch breaks runSegmentationNet');
@@ -129,4 +129,21 @@ function b = localBlur(img)
 k = fspecial('gaussian', [9 9], 3);
 b = img;
 for c = 1:3, b(:,:,c) = imfilter(img(:,:,c), k, 'replicate'); end
+end
+
+function tAgreement()
+% Wrapper/canonical agreement: same explicit thresholds on the same
+% synthetic inputs must give identical enhanced images, scores, ROI and
+% legacy gradeability (UNEXECUTED here - run in MATLAB).
+cases = {localFundus(128,128,45,1.0,0), localFundus(128,128,45,0.7,0), ...
+         uint8(128*ones(96,96,3))};
+for i = 1:numel(cases)
+    img = cases{i};
+    [isG, eRGB, eGray, fs, es, roi] = assessAndEnhanceImage(img, 8, 3.5);
+    rep = assessFundusQuality(img, 'FocusThresh', 8, 'EntropyThresh', 3.5, 'CalibrationDir', []);
+    assert(isG == rep.legacyGradeable, sprintf('case %d: legacy boolean diverged', i));
+    assert(isequal(eRGB, rep.enhancedRGB) && isequal(eGray, rep.enhancedGray), sprintf('case %d: enhanced images diverged', i));
+    assert(fs == rep.focusScore && es == rep.entropyScore, sprintf('case %d: scores diverged', i));
+    assert(isequal(roi, rep.roiMask), sprintf('case %d: ROI diverged', i));
+end
 end

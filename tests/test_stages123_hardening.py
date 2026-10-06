@@ -191,7 +191,7 @@ def test_release_hardening():
     check("pipeline exposes decision (not coerced)",
           "qualityDecision" in rsp and "gradeable-with-warning" in rsp, "BORDERLINE silently PASS")
     check("bridge struct passes decision through",
-          "qualityDecision" in txt("screenOneImage-1.m"), "bridge blind to BORDERLINE")
+          "qualityDecision" in txt("screenOneImage.m"), "bridge blind to BORDERLINE")
     # calibration single-source: gate resolves once, reporting reads r
     check("no second quality load in production_inference",
           "qualityLoadCalibration" not in pinf, "dual-load divergence risk")
@@ -231,9 +231,53 @@ def test_release_hardening():
           ft < 8.5 < fb, "margin math broken")
 
 
+def test_audit_findings():
+    """Independent-audit findings: filename contract, single core,
+    temperature exposure, training audit, agreement tests."""
+    # 1. screenOneImage callable contract
+    check("screenOneImage.m exists (callable)",
+          os.path.exists(os.path.join(ROOT, "screenOneImage.m")), "MATLAB cannot resolve -1 filename")
+    check("stale screenOneImage-1.m removed",
+          not os.path.exists(os.path.join(ROOT, "screenOneImage-1.m")), "duplicate entry point")
+    decl = [ln for ln in txt("screenOneImage.m").splitlines() if ln.startswith("function")]
+    check("function declaration is screenOneImage",
+          any("function result = screenOneImage(" in ln for ln in decl), f"{decl[:1]}")
+    check("runBatchScreening references screenOneImage",
+          "screenOneImage(" in txt("runBatchScreening.m"), "batch broken")
+    check("bridge_server references screenOneImage",
+          "screenOneImage" in txt("bridge_server.py"), "bridge broken")
+    # 2. single core, no duplication, no recursion
+    legacy = txt("assessAndEnhanceImage.m")
+    canon = txt("assessFundusQuality.m")
+    algo = ["imopen", "adapthisteq", "imnlmfilt", "fspecial", "bwconncomp", "rgb2gray"]
+    check("wrapper holds no algorithm (thin delegator)",
+          not any(k in legacy for k in algo), "duplicated core")
+    check("canonical holds the core", sum(k in canon for k in algo) >= 5, "core missing")
+    check("no recursive dependency", "assessAndEnhanceImage(" not in canon, "recursion")
+    check("MATLAB agreement test registered (UNEXECUTED)",
+          "tAgreement" in txt("testQualitySubsystem.m"), "agreement untested")
+    # 3+4. BORDERLINE/calibration already pinned in test_release_hardening
+    # 5. temperature applied-value exposure
+    rsp = txt("runScreeningPipeline.m")
+    pinf = txt("production_inference.m")
+    check("pipeline reports applied temperature",
+          "r.temperatureT = models.temperatureT" in rsp and "temperatureCalibrated" in rsp, "T not exposed")
+    check("report reads applied T (no second file load)",
+          "temperatureT = r.temperatureT" in pinf and "temperatureCalFile" not in pinf, "displayed!=applied risk")
+    # 6. training quality audit exists, inference-free, policy-explicit
+    check("auditQualityBatch.m exists", os.path.exists(os.path.join(ROOT, "auditQualityBatch.m")), "missing")
+    audit = txt("auditQualityBatch.m")
+    code = "\n".join(ln for ln in audit.splitlines() if not ln.strip().startswith("%"))
+    check("audit uses quality API, no model inference",
+          "assessFundusQuality" in code and "getOrLoadCachedModels" not in code and "dlarray" not in code and "predict(" not in code, "audit runs inference")
+    check("audit policy explicit (audit-only vs enforce)",
+          "audit-only" in audit and "enforce" in audit, "silent curation")
+    check("audit writes CSV manifest", "writetable" in audit and "csv" in audit.lower(), "no manifest")
+
+
 TESTS = [test_grading_contract, test_quality_canonical, test_chain_shapes,
          test_masks_and_pixels, test_images_and_roi, test_labels_leakage_config,
-         test_release_hardening]
+         test_release_hardening, test_audit_findings]
 
 if __name__ == "__main__":
     for t in TESTS:
