@@ -35,9 +35,10 @@ function [maskOrig, maskNet] = runSegmentationNet(net, enhancedGray, roiMask, ne
 %                   as enhancedGray (from the SAME assessAndEnhanceImage.m
 %                   call - a size mismatch here is a caller bug and is
 %                   checked below rather than silently misaligned)
-%   netInputSize  - [H W] the network was trained at (default [512 512] -
-%                   see preprocessFundusForSegmentation.m's header for why
-%                   this number must stay in sync across files)
+%   netInputSize  - [H W] the network was trained at (default
+%                   segmentationConfig.inputSize, currently [512 512] -
+%                   both this file and preprocessFundusForSegmentation.m
+%                   default to the same config)
 %
 % OUTPUTS:
 %   maskOrig - logical mask at enhancedGray's ORIGINAL resolution
@@ -48,8 +49,9 @@ function [maskOrig, maskNet] = runSegmentationNet(net, enhancedGray, roiMask, ne
 %
 % Requires: Image Processing Toolbox, Deep Learning Toolbox.
 
+cfgDefault = segmentationConfig();
 if nargin < 4 || isempty(netInputSize)
-    netInputSize = [512 512]; % keep in sync with preprocessFundusForSegmentation.m and train_UNet_Segmentation.m's imageSize
+    netInputSize = cfgDefault.inputSize;
 end
 
 origSize = size(enhancedGray, [1 2]);
@@ -59,12 +61,25 @@ if ~isequal(size(roiMask, [1 2]), origSize)
          'assessAndEnhanceImage.m call on the SAME image.'], ...
         size(roiMask,1), size(roiMask,2), origSize(1), origSize(2));
 end
+if ~isequal(netInputSize, cfgDefault.inputSize)
+    fprintf(['runSegmentationNet: non-default netInputSize [%d %d] ' ...
+             '(config default [%d %d]) - ensure training used the same size.\n'], ...
+        netInputSize(1), netInputSize(2), cfgDefault.inputSize(1), cfgDefault.inputSize(2));
+end
 
+% Parity contract with preprocessFundusForSegmentation.m (training):
+% identical bilinear resize + single/255 scaling, so train and inference
+% see identically-processed pixels. Mask resize-back is nearest +
+% re-masked by the ORIGINAL-resolution roiMask (categorical, not photo).
 imgResized = imresize(enhancedGray, netInputSize, 'bilinear');
 dlIn = dlarray(single(imgResized) / 255, 'SSC');
 dlOut = extractdata(predict(net, dlIn));
+% dlOut is [H W 2 N] softmax probabilities (class 1 = Background,
+% class 2 = Foreground per segmentationConfig.classNames ordering).
+% squeeze handles the N==1 single-image case; callers batching N>1
+% should loop per image (documented - this wrapper is single-image).
 [~, classIdx] = max(dlOut, [], 3);
-maskNet = squeeze(classIdx) == 2; % class 2 = "Foreground" (class 1 = "Background")
+maskNet = logical(squeeze(classIdx) == 2); % class 2 = "Foreground"
 
-maskOrig = imresize(maskNet, origSize, 'nearest') & roiMask; % nearest - a mask is categorical, not continuous
+maskOrig = logical(imresize(maskNet, origSize, 'nearest')) & logical(roiMask);
 end

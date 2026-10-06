@@ -102,8 +102,11 @@ try
     r.ruleGrade = ruleGrade; r.evidence = evidence;
 
     if r.haveTrainedModels
-        fusionTensor = single(cat(3, imresize(enhancedRGB, [224 224]), ...
-            imresize(uint8(vesselMask)*255, [224 224]), imresize(uint8(lesionMask)*255, [224 224])));
+        % Stage-2 fix: masks are categorical - nearest-neighbor only.
+        % The previous default (bicubic) invented fractional 0-255 values
+        % the grader never saw as binary. Photos stay bilinear.
+        fusionTensor = single(cat(3, imresize(enhancedRGB, [224 224], 'bilinear'), ...
+            imresize(uint8(vesselMask)*255, [224 224], 'nearest'), imresize(uint8(lesionMask)*255, [224 224], 'nearest')));
         dlX = dlarray(fusionTensor, 'SSC');
         logits = predict(models.drNet, dlX, Outputs="dr_fc");
         probs = extractdata(softmax(logits ./ models.temperatureT));

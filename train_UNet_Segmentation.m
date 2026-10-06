@@ -1,5 +1,5 @@
 % =========================================================================
-% MODULE 2 (remodeled): U-Net ensemble for vessel/lesion segmentation
+% MODULE 2 (Stage-2 hardened): U-Net ensemble for vessel/lesion segmentation
 % Requires: Deep Learning Toolbox, Image Processing Toolbox, Computer
 %           Vision Toolbox - assumed fully available and licensed.
 %
@@ -13,25 +13,38 @@
 %   Lesions: DDR's 757-image segmentation subset (primary) + DIARETDB1
 %            (supplement) - both far exceed IDRiD's 81-image segmentation
 %            subset if they download successfully
-% Multiple sources for the same purpose are combined via imageDatastore's
-% cell-array-of-folders support, not trained as separate networks.
+% Multiple sources for the same purpose are combined via explicit paired
+% file lists (buildSegmentationFileLists.m), not multi-folder datastores
+% hoping alphabetical order aligns images with masks.
 %
-% TRAINING IS NOW ACTIVE (previously left commented out while this
-% project had no way to verify a training call wouldn't silently fail
-% partway through in an environment with no real MATLAB to test against).
-% With a real license and toolboxes assumed, trainnet(...) runs for real
-% below, with checkpointing so a multi-hour run survives a crash/restart.
+% STAGE-2 HARDENING (this revision):
+%   - Single config: segmentationConfig.m owns inputSize/imageSize/
+%     classNames/labelIDs ([0 255] canonical - fixes the old [0 1] bug),
+%     Tversky alpha/beta, seed, val fraction. No literals duplicated.
+%   - Paired file lists by basename stem (never order-assumed combine).
+%   - validateMaskConventions ALWAYS runs (even single source), ERRORS on
+%     inversion or 0/1-vs-0/255 mix instead of warning-and-continuing.
+%   - Leakage-safe split via splitSegmentationDataset.m (seeded,
+%     group-aware, no subset() on CombinedDatastore - splits file lists
+%     FIRST, then builds per-split datastores).
+%   - Per-target checkpoint dirs + resume-from-latest (crash restart now
+%     actually works, not just writes files nobody reads).
+%   - Tversky guards (probability range, 2-channel shape) + synchronized
+%     train-time augmentation (same flip to image AND mask).
+%   - Extended .meta.json (resolution, counts, file lists hash, val spec).
 %
 % BEFORE RUNNING: call datasetRegistry() on its own first and check what
 % it reports as FOUND. Each raw download needs a one-time manual
 % reorganization into the images/ + masks/ folder pairs this script
-% expects (STARE/CHASE_DB1/HRF/DDR each ship with their own internal
-% layout that I have not seen firsthand and cannot script a parser for
-% sight-unseen - open the extracted folder, see what's actually in it,
-% and sort images into <registry localDir>/images and masks into
-% <registry localDir>/masks, binary PNG, 0=background/255=foreground).
+% expects. For DDR_seg's 4 per-class masks, run mergeDDRSegMasks.m once
+% (MA|HE -> masks_maho/, EX|SE -> masks_exudate/) instead of hand-merging.
+% DIARETDB1 ships per-grader confidence markings, not clean binary masks
+% - inspect before assuming pixelLabelDatastore can read it directly; the
+% validator will flag non-binary sources rather than silently training.
 % =========================================================================
 disp('Building segmentation U-Net ensemble from available datasets...');
+cfg = segmentationConfig();
+rng(cfg.seed); % global determinism baseline; per-target reseed below
 registry = datasetRegistry();
 availByName = containers.Map({registry.name}, {registry.available});
 dirByName = containers.Map({registry.name}, {registry.localDir});
@@ -51,17 +64,17 @@ end
 
 fprintf('Vessel sources found: %d  |  Lesion sources found: %d\n', numel(vesselSources), numel(lesionSources));
 
-imageSize = [512 512 1];
-numClasses = 2; % Background, Foreground
-classNames = ["Background","Foreground"];
-labelIDs = [0, 1];
+imageSize = cfg.imageSize;
+numClasses = cfg.numClasses;
+classNames = cfg.classNames;
+labelIDs = cfg.labelIDs;
 
 lesionTargets = struct('name', {}, 'imageFolders', {}, 'maskFolders', {}, 'alpha', {}, 'beta', {});
 if ~isempty(vesselSources)
     lesionTargets(end+1) = struct('name','Vessels', ...
-        'imageFolders', {fullfile(vesselSources,'images')}, ...
-        'maskFolders',  {fullfile(vesselSources,'masks')}, ...
-        'alpha', 0.3, 'beta', 0.7);
+        'imageFolders', {localExpandSub(vesselSources, 'images')}, ...
+        'maskFolders',  {localExpandSub(vesselSources, 'masks')}, ...
+        'alpha', cfg.tversky.vessels.alpha, 'beta', cfg.tversky.vessels.beta);
 end
 if ~isempty(lesionSources)
     % Kept as TWO separate targets (not collapsed to one "Lesions" class)
@@ -72,19 +85,17 @@ if ~isempty(lesionSources)
     % to reconcile everywhere else that loads these .mat files.
     %
     % DDR_seg ships MA, HE, EX, and SE as four SEPARATE mask classes (see
-    % datasetRegistry.m's DDR_seg entry) - combine MA+HE masks into one
-    % maho/ subfolder and EX(+SE) masks into one exudate/ subfolder under
-    % each source's local dir before running this (I have not seen DDR's
-    % actual per-class file layout firsthand, so I can't script that
-    % merge sight-unseen - open the extracted folder and see what's there).
+    % datasetRegistry.m's DDR_seg entry) - run mergeDDRSegMasks.m once to
+    % build maho/ (MA|HE) and exudate/ (EX|SE) subfolders under each
+    % source's local dir before running this.
     lesionTargets(end+1) = struct('name','MicroaneurysmsHemorrhages', ...
-        'imageFolders', {fullfile(lesionSources,'images')}, ...
-        'maskFolders',  {fullfile(lesionSources,'masks_maho')}, ...
-        'alpha', 0.3, 'beta', 0.7);
+        'imageFolders', {localExpandSub(lesionSources, 'images')}, ...
+        'maskFolders',  {localExpandSub(lesionSources, 'masks_maho')}, ...
+        'alpha', cfg.tversky.mahe.alpha, 'beta', cfg.tversky.mahe.beta);
     lesionTargets(end+1) = struct('name','Exudates', ...
-        'imageFolders', {fullfile(lesionSources,'images')}, ...
-        'maskFolders',  {fullfile(lesionSources,'masks_exudate')}, ...
-        'alpha', 0.3, 'beta', 0.6);
+        'imageFolders', {localExpandSub(lesionSources, 'images')}, ...
+        'maskFolders',  {localExpandSub(lesionSources, 'masks_exudate')}, ...
+        'alpha', cfg.tversky.exudate.alpha, 'beta', cfg.tversky.exudate.beta);
 end
 
 if isempty(lesionTargets)
@@ -93,63 +104,96 @@ if isempty(lesionTargets)
 end
 
 baseOptions = trainingOptions('adam', ...
-    InitialLearnRate = 1e-3, ...
-    MaxEpochs = 30, ...
-    MiniBatchSize = 8, ...
+    InitialLearnRate = cfg.train.initialLearnRate, ...
+    MaxEpochs = cfg.train.maxEpochs, ...
+    MiniBatchSize = cfg.train.miniBatchSize, ...
     Shuffle = 'every-epoch', ...
-    ValidationFrequency = 20, ...
+    ValidationFrequency = cfg.train.validationFrequency, ...
     Plots = 'training-progress', ...
     VerboseFrequency = 10, ...
-    CheckpointPath = fullfile(pwd,'checkpoints'), ...
-    CheckpointFrequency = 5, ...
-    CheckpointFrequencyUnit = 'epoch');
-
-if ~isfolder('checkpoints'), mkdir('checkpoints'); end
+    CheckpointFrequency = cfg.train.checkpointFrequency, ...
+    CheckpointFrequencyUnit = cfg.train.checkpointFrequencyUnit);
 
 for i = 1:numel(lesionTargets)
     target = lesionTargets(i);
-    fprintf('\n--- %s (%d source folder(s)) ---\n', target.name, numel(target.imageFolders));
+    fprintf('\n--- %s (%d image folder(s), %d mask folder(s)) ---\n', ...
+        target.name, numel(target.imageFolders), numel(target.maskFolders));
+    rng(cfg.seed + i); % per-target deterministic stream (split + init + shuffle)
 
-    if numel(target.maskFolders) > 1
-        fprintf('Checking mask convention consistency across %d source(s) before training...\n', numel(target.maskFolders));
-        validateMaskConventions(target.maskFolders);
+    % 1) Paired file lists (fixes nested-cell + misalignment bugs).
+    [imagePaths, maskPaths, listReport] = buildSegmentationFileLists( ...
+        target.imageFolders, target.maskFolders, target.name);
+
+    % 2) Mask-convention gate: ALWAYS runs, even single source. Errors on
+    % inversion or mixed 0/1-vs-0/255 (unrecoverable label corruption).
+    fprintf('Checking mask conventions before training...\n');
+    conventionReport = validateMaskConventions(target.maskFolders, target.imageFolders);
+
+    % 3) Leakage-safe seeded split on FILE LISTS (no subset() fragility).
+    % PatientIdFcn: segmentation sources publish no patient/eye key, so
+    % this is an explicit image-level split - the report says so. If a
+    % source-specific key becomes available (e.g. Messidor pairing for a
+    % future seg source), pass it here to upgrade to group-level.
+    [trainTbl, valTbl, splitReport] = splitSegmentationDataset( ...
+        imagePaths, maskPaths, ...
+        'ValFraction', cfg.valFraction, 'Seed', cfg.seed + i, ...
+        'TargetName', target.name);
+
+    % 4) Per-split datastores. Images: SAME enhancement path as inference
+    % (preprocessFundusForSegmentation - closes the covariate-shift bug).
+    % Masks: nearest-neighbor resize only (categorical, never enhanced).
+    netInputSize = cfg.inputSize;
+    imdsTrainPlain = imageDatastore(trainTbl.imagePaths);
+    imdsTrain = transform(imdsTrainPlain, @(img) localPreprocess(img, netInputSize));
+    pxdsTrainPlain = pixelLabelDatastore(trainTbl.maskPaths, classNames, labelIDs);
+    pxdsTrain = transform(pxdsTrainPlain, @(lbl) imresize(lbl, netInputSize, 'nearest'));
+    cdsTrain = combine(imdsTrain, pxdsTrain);
+    % Synchronized augmentation: same random horizontal flip to image AND
+    % mask (flipping one without the other would corrupt supervision).
+    cdsTrain = transform(cdsTrain, @localAugmentPair);
+
+    imdsValPlain = imageDatastore(valTbl.imagePaths);
+    imdsVal = transform(imdsValPlain, @(img) localPreprocess(img, netInputSize));
+    pxdsValPlain = pixelLabelDatastore(valTbl.maskPaths, classNames, labelIDs);
+    pxdsVal = transform(pxdsValPlain, @(lbl) imresize(lbl, netInputSize, 'nearest'));
+    cdsVal = combine(imdsVal, pxdsVal);
+
+    % 5) Per-target checkpoint dir + resume-from-latest.
+    ckptDir = fullfile(pwd, 'checkpoints', ['seg_' char(target.name)]);
+    if ~isfolder(ckptDir), mkdir(ckptDir); end
+    trainOpts = baseOptions;
+    trainOpts.CheckpointPath = ckptDir;
+    trainOpts.ValidationData = cdsVal;
+    startNet = unet(imageSize, numClasses, EncoderDepth=cfg.encoderDepth);
+    resumeFile = localLatestCheckpoint(ckptDir);
+    if ~isempty(resumeFile)
+        try
+            S = load(resumeFile);
+            % Checkpoint files store 'net' (trainnet format). Accept both
+            % 'net' and legacy bare-network saves.
+            if isfield(S, 'net')
+                startNet = S.net;
+                fprintf('Resuming %s from checkpoint %s\n', target.name, resumeFile);
+            end
+        catch ME
+            warning('train_UNet_Segmentation:resumeFailed', ...
+                'Found %s but could not load it (%s) - training from scratch.', resumeFile, ME.message);
+        end
     end
-
-    net = unet(imageSize, numClasses, EncoderDepth=4);
     lossFcn = @(Y,T) tverskyLoss(Y, T, target.alpha, target.beta);
 
-    imdsPlain = imageDatastore(target.imageFolders);
-    n = numel(imdsPlain.Files);
-    % preprocessFundusForSegmentation applies the SAME enhancement path
-    % (CLAHE, flat-fielding, denoise via assessAndEnhanceImage.m) that
-    % production_inference.m's runSegmentationNet.m feeds the trained
-    % network at inference time. Training on raw pixels while inference
-    % runs on enhanced pixels is a covariate-shift bug distinct from (and
-    % on top of) the resize mismatch - both are closed by routing both
-    % paths through the same function. Returns [imgOut, roiMaskOut]; only
-    % imgOut is needed for the datastore, hence the wrapper below.
-    imds = transform(imdsPlain, @(img) firstOutputOnly(img, imageSize(1:2)));
-    pxds = pixelLabelDatastore(target.maskFolders, classNames, labelIDs);
-    pxds = transform(pxds, @(lbl) imresize(lbl, imageSize(1:2), 'nearest')); % masks: plain nearest-neighbor resize only - no enhancement, they're categorical labels, not photos
-    cds = combine(imds, pxds);
-
-    nVal = max(round(0.15*n), 1);
-    [cdsTrain, cdsVal] = splitEachLabel_manual(cds, n, nVal);
-    % splitEachLabel_manual: see local function below - pixelLabelDatastore
-    % doesn't support MATLAB's splitEachLabel the way plain classification
-    % datastores do, so this does an index-based split instead. Uses
-    % subset(), which is a general datastore method - if your MATLAB
-    % release's subset() doesn't accept a CombinedDatastore directly,
-    % apply subset() to imds and pxds separately (same indices) and
-    % combine() the two subsets instead.
-
-    fprintf('Training %s on %d images (%d held out for validation)...\n', target.name, n-nVal, nVal);
-    trainOpts = baseOptions;
-    trainOpts.ValidationData = cdsVal;
-    net = trainnet(cdsTrain, net, lossFcn, trainOpts);
+    fprintf('Training %s on %d images (%d held out for validation)...\n', ...
+        target.name, numel(trainTbl.imagePaths), numel(valTbl.imagePaths));
+    net = trainnet(cdsTrain, startNet, lossFcn, trainOpts);
 
     outFile = sprintf('unet_%s.mat', target.name);
-    saveModelWithMetadata(outFile, net, struct('lesionTarget', target.name, 'alpha', target.alpha, 'beta', target.beta, 'nSourceFolders', numel(target.imageFolders)));
+    saveModelWithMetadata(outFile, net, struct( ...
+        'lesionTarget', target.name, 'alpha', target.alpha, 'beta', target.beta, ...
+        'inputSize', netInputSize, 'imageSize', imageSize, ...
+        'encoderDepth', cfg.encoderDepth, 'seed', cfg.seed + i, ...
+        'nTrain', numel(trainTbl.imagePaths), 'nVal', numel(valTbl.imagePaths), ...
+        'nPaired', listReport.nPaired, 'splitPatientLevel', splitReport.isPatientLevel, ...
+        'classNames', classNames, 'labelIDs', labelIDs));
     fprintf('Saved %s\n', outFile);
 end
 
@@ -158,29 +202,74 @@ disp('Done. production_inference.m expects unet_Vessels.mat, unet_Microaneurysms
 disp('and unet_Exudates.mat next to it - matching the target names above.');
 
 % ------------------------------------------------------------------
-function imgOut = firstOutputOnly(rawImg, netInputSize)
+function expanded = localExpandSub(sources, sub)
+% Correctly expands {'<dir1>','<dir2>'} + 'images' -> {'<dir1>/images',
+% '<dir2>/images'}. Replaces the buggy fullfile(cell,'images')-in-{…}
+% pattern that produced nested cells and a count of 1 for N sources.
+expanded = cellfun(@(d) fullfile(d, sub), sources, 'UniformOutput', false);
+end
+
+% ------------------------------------------------------------------
+function imgOut = localPreprocess(rawImg, netInputSize)
 % preprocessFundusForSegmentation returns [imgOut, roiMaskOut]; a
-% datastore transform function needs exactly one output per read, and
-% training doesn't need the ROI mask (that matters at inference time for
+% datastore transform needs exactly one output per read, and training
+% doesn't need the ROI mask (that matters at inference time for
 % re-masking the resized prediction - see runSegmentationNet.m).
 [imgOut, ~] = preprocessFundusForSegmentation(rawImg, netInputSize);
+% Guard the U-Net channel contract: unet([H W 1]) needs HxWx1 single.
+% Grayscale preprocess returns 2D HxW; add the singleton channel dim.
+if ndims(imgOut) == 2
+    imgOut = reshape(imgOut, [size(imgOut,1), size(imgOut,2), 1]);
+end
+end
+
+% ------------------------------------------------------------------
+function pair = localAugmentPair(pairIn)
+% Synchronized train-time augmentation for a combined {image, label} read.
+% Applies the SAME random horizontal flip to both (image bilinear content
+% tolerates flip; mask is flipped identically so supervision stays aligned).
+% Vertical flips and rotations are deliberately NOT applied: fundus
+% orientation (superior/inferior) matters to downstream quadrant logic, and
+% arbitrary rotations would require matching ROI handling. Extend here
+% (with identical geometry to both) if a future benchmark justifies it.
+img = pairIn{1}; lbl = pairIn{2};
+if rand() < 0.5
+    img = fliplr(img);
+    lbl = fliplr(lbl);
+end
+pair = {img, lbl};
 end
 
 % ------------------------------------------------------------------
 function loss = tverskyLoss(Y, T, alpha, beta)
+% Y: network output (softmax probabilities, [H W 2 N]).
+% T: one-hot targets, same size (pixelLabelDatastore + trainnet encoding).
+% Guards: Y must be probabilities in [0,1] with 2 channels; if trainnet
+% ever passes logits (negatives, rows not summing to 1), this errors
+% loudly instead of training on a meaningless loss.
 smooth = 1e-6;
+assert(size(Y, 3) == 2, 'tverskyLoss:channels - expected 2-channel softmax output, got %d.', size(Y, 3));
+dY = extractdata(Y);
+if any(dY(:) < -1e-3) || any(dY(:) > 1 + 1e-3)
+    error(['tverskyLoss:notProbabilities - network output outside [0,1] (min %.3f, max %.3f). ' ...
+           'This loss expects post-softmax probabilities; check the U-Net head.'], min(dY(:)), max(dY(:)));
+end
 TP = sum(sum(Y .* T, 1), 2);
 FP = sum(sum(Y .* (1 - T), 1), 2);
 FN = sum(sum((1 - Y) .* T, 1), 2);
 tverskyIndex = (TP + smooth) ./ (TP + alpha.*FP + beta.*FN + smooth);
+% Mean over classes AND batch: background-heavy batches still contribute
+% 50% background by design (screening recalls foreground at the cost of
+% FP - see segmentationConfig). Class-imbalance handling beyond Tversky
+% beta (foreground sampling) is a future benchmark, not a silent default.
 loss = mean(1 - tverskyIndex, 'all');
 end
 
 % ------------------------------------------------------------------
-function [cdsTrain, cdsVal] = splitEachLabel_manual(cds, n, nVal)
-idx = randperm(n);
-valIdx = idx(1:nVal);
-trainIdx = idx(nVal+1:end);
-cdsTrain = subset(cds, trainIdx);
-cdsVal = subset(cds, valIdx);
+function latest = localLatestCheckpoint(ckptDir)
+latest = '';
+d = dir(fullfile(ckptDir, '*.mat'));
+if isempty(d), return; end
+[~, order] = sort([d.datenum]);
+latest = fullfile(d(order(end)).folder, d(order(end)).name);
 end

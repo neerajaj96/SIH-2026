@@ -22,11 +22,24 @@ function metrics = evaluateSegmentation(predMask, gtMask)
 % USAGE (whole test set, batch form):
 %   metrics = evaluateSegmentation(predMaskCellArray, gtMaskCellArray)
 %   - pass two cell arrays of equal length, one mask per cell. Returns
-%     per-image metrics AND the mean +/- std across images, which is what
-%     you actually want to report (a single pooled Dice across all pixels
-%     of all images lets your largest images dominate the average; the
-%     per-image-then-average convention is standard in the segmentation
-%     literature and is what this uses instead).
+%     per-image metrics AND the mean +/- std across images (macro average,
+%     the literature standard - every image counts equally), PLUS a pooled
+%     (micro) average over all pixels (every pixel counts equally).
+%     Report BOTH: if macro >> micro, small images with empty masks are
+%     inflating the mean; if micro >> macro, large images dominate.
+%     See evaluateSegmentationDataset.m for the end-to-end held-out runner.
+%
+% EMPTY-MASK POLICY (Stage-2 documented, unchanged behavior):
+%   - Empty-vs-empty (no GT lesion, no predicted lesion): dice=1, iou=1
+%     (perfect - correctly predicted absence), sens/spec/prec=NaN
+%     (undefined - no positive to detect). This rewards true negatives
+%     without fabricating a sensitivity.
+%   - Empty GT with FP>0: dice=0 (not NaN) - a false alarm on a healthy
+%     image must hurt, not be excluded. NaN-mean aggregation would hide
+%     this if you only looked at sensitivity.
+%   - Always check .nEmpty and .nEmptyCorrect alongside the means: a
+%     0.95 mean Dice with 80% empty images is a different claim than the
+%     same mean with 5% empty images.
 %
 % INPUTS:
 %   predMask, gtMask - logical masks, same size (or matched cell arrays
@@ -34,10 +47,11 @@ function metrics = evaluateSegmentation(predMask, gtMask)
 %                       pair per index)
 %
 % OUTPUTS:
-%   metrics - struct with fields .dice .iou .sensitivity .specificity
-%             .precision (scalars, for a single pair); for the batch
-%             form, instead a struct with .perImage (struct array),
-%             .mean, .std (each with the same 5 fields) and .n
+%   metrics - single-pair struct with .dice .iou .sensitivity .specificity
+%             .precision plus audit counts .tp .fp .fn .tn .nEmptyGT
+%             (1 if GT empty else 0); batch form struct with .perImage
+%             (struct array, same fields), .mean, .std, .pooled (micro),
+%             .n, .nEmpty, .nEmptyCorrect
 %
 % Requires: nothing beyond base MATLAB.
 
@@ -47,7 +61,8 @@ if iscell(predMask)
             'predMask and gtMask must be cell arrays of the SAME length, one mask pair per index.');
     end
     n = numel(predMask);
-    perImage = repmat(struct('dice',0,'iou',0,'sensitivity',0,'specificity',0,'precision',0), n, 1);
+    perImage = repmat(struct('dice',0,'iou',0,'sensitivity',0,'specificity',0,'precision',0, ...
+        'tp',0,'fp',0,'fn',0,'tn',0,'nEmptyGT',0), n, 1);
     for i = 1:n
         perImage(i) = localSinglePairMetrics(predMask{i}, gtMask{i});
     end
@@ -58,11 +73,25 @@ if iscell(predMask)
         meanS.(fieldsToAgg{f}) = mean(vals, 'omitnan');
         stdS.(fieldsToAgg{f})  = std(vals, 'omitnan');
     end
-    metrics = struct('perImage', {perImage}, 'mean', meanS, 'std', stdS, 'n', n);
-    fprintf('=== Segmentation evaluation over %d image(s) ===\n', n);
-    fprintf('%-12s %8s %8s\n', '', 'mean', 'std');
+    % Pooled (micro): sum counts first, then compute - large images dominate.
+    TP = sum([perImage.tp]); FP = sum([perImage.fp]);
+    FN = sum([perImage.fn]); TN = sum([perImage.tn]);
+    pooled = struct( ...
+        'dice', localSafeDiv(2*TP, 2*TP + FP + FN, 1.0), ...
+        'iou',  localSafeDiv(TP, TP + FP + FN, 1.0), ...
+        'sensitivity', localSafeDiv(TP, TP + FN, NaN), ...
+        'specificity', localSafeDiv(TN, TN + FP, NaN), ...
+        'precision',   localSafeDiv(TP, TP + FP, NaN));
+    nEmpty = sum([perImage.nEmptyGT]);
+    % Empty-correct: empty GT AND dice==1 (no FP). Distinguishes "model
+    % correctly says healthy" from "model alarms on every healthy image".
+    nEmptyCorrect = sum(arrayfun(@(m) m.nEmptyGT == 1 && m.dice == 1.0, perImage));
+    metrics = struct('perImage', {perImage}, 'mean', meanS, 'std', stdS, ...
+        'pooled', pooled, 'n', n, 'nEmpty', nEmpty, 'nEmptyCorrect', nEmptyCorrect);
+    fprintf('=== Segmentation evaluation over %d image(s) (%d empty GT, %d correctly empty) ===\n', n, nEmpty, nEmptyCorrect);
+    fprintf('%-12s %8s %8s %8s\n', '', 'mean', 'std', 'pooled');
     for f = 1:numel(fieldsToAgg)
-        fprintf('%-12s %8.4f %8.4f\n', fieldsToAgg{f}, meanS.(fieldsToAgg{f}), stdS.(fieldsToAgg{f}));
+        fprintf('%-12s %8.4f %8.4f %8.4f\n', fieldsToAgg{f}, meanS.(fieldsToAgg{f}), stdS.(fieldsToAgg{f}), pooled.(fieldsToAgg{f}));
     end
 else
     if ~isequal(size(predMask), size(gtMask))
@@ -82,11 +111,13 @@ FP = nnz(pred & ~gt);
 FN = nnz(~pred & gt);
 TN = nnz(~pred & ~gt);
 
-m.dice = localSafeDiv(2*TP, 2*TP + FP + FN, 1.0); % by convention here, an empty-vs-empty pair (TP=FP=FN=0) counts as a PERFECT match, not undefined
+m.dice = localSafeDiv(2*TP, 2*TP + FP + FN, 1.0); % empty-vs-empty = 1.0 (correct absence); empty-GT-with-FP = 0 (false alarm hurts)
 m.iou  = localSafeDiv(TP, TP + FP + FN, 1.0);
-m.sensitivity = localSafeDiv(TP, TP + FN, NaN); % undefined (NaN, not 0) if there's no positive ground truth to detect at all
+m.sensitivity = localSafeDiv(TP, TP + FN, NaN); % NaN if no positive GT - undefined, not 0
 m.specificity = localSafeDiv(TN, TN + FP, NaN);
-m.precision   = localSafeDiv(TP, TP + FP, NaN); % undefined if the model predicted no positives at all
+m.precision   = localSafeDiv(TP, TP + FP, NaN); % NaN if no predicted positive
+m.tp = TP; m.fp = FP; m.fn = FN; m.tn = TN;
+m.nEmptyGT = double(~any(gt(:)));
 end
 
 % ------------------------------------------------------------------

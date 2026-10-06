@@ -68,6 +68,18 @@ nPassed = 0; nTotal = 0;
 [nPassed, nTotal] = localCheck(nPassed, nTotal, ...
     'quality calibrator midpoint/sens/spec math', @() localTestQualityCalibMath());
 
+[nPassed, nTotal] = localCheck(nPassed, nTotal, ...
+    'segmentationConfig is the single source of truth (512, 0/255 IDs, class order)', @() localTestSegConfigParity());
+
+[nPassed, nTotal] = localCheck(nPassed, nTotal, ...
+    'evaluateSegmentation reports counts + pooled micro + empty-GT policy', @() localTestSegEvalCounts());
+
+[nPassed, nTotal] = localCheck(nPassed, nTotal, ...
+    'splitSegmentationDataset is seeded, deterministic and leak-free', @() localTestSegSplit());
+
+[nPassed, nTotal] = localCheck(nPassed, nTotal, ...
+    'buildSegmentationFileLists pairs by stem and errors on orphans', @() localTestSegPairing());
+
 fprintf('\n=== %d / %d checks passed ===\n', nPassed, nTotal);
 if nPassed < nTotal
     error('runSelfTests:failures', '%d check(s) failed - see above.', nTotal - nPassed);
@@ -321,4 +333,82 @@ goodV = [9 10 11 12]; badV = [2 3 4 5];
 th = (min(goodV) + max(badV)) / 2;
 assert(abs(th - 7) < 1e-9, sprintf('midpoint: got %.4f, expected 7', th));
 assert(mean(goodV >= th) == 1 && mean(badV < th) == 1, 'sens/spec should be 1 on separated data');
+end
+
+% ------------------------------------------------------------------
+function localTestSegConfigParity()
+% Pins the Stage-2 single-source-of-truth contract: no duplicated 512 or
+% [0 1] literals may drift back in. Mirrors tests/test_seg_mirror.py.
+cfg = segmentationConfig();
+assert(isequal(cfg.inputSize, [512 512]), 'inputSize must be [512 512]');
+assert(isequal(cfg.imageSize, [512 512 1]), 'imageSize must be [512 512 1]');
+assert(isequal(cfg.labelIDs, [0 255]), 'labelIDs must be [0 255] (0/255 on-disk canonical)');
+assert(isequal(string(cfg.classNames), ["Background","Foreground"]), 'class order Background,Foreground');
+% Train script must not reintroduce the old literals.
+trainBody = fileread('train_UNet_Segmentation.m');
+assert(isempty(strfind(trainBody, 'labelIDs = [0, 1]')), 'old [0 1] bug must not return');
+assert(isempty(strfind(trainBody, 'splitEachLabel_manual')), 'old unseeded splitter must not return');
+assert(~isempty(strfind(trainBody, 'segmentationConfig')), 'train must read segmentationConfig');
+assert(~isempty(strfind(trainBody, 'buildSegmentationFileLists')), 'train must pair via buildSegmentationFileLists');
+end
+
+% ------------------------------------------------------------------
+function localTestSegEvalCounts()
+% Hardened evaluateSegmentation: counts audit + pooled + empty policy.
+% Mirrors tests/test_seg_mirror.py batch cases.
+gt = false(10,10); gt(3:6,3:6) = true;
+pred = false(10,10); pred(4:7,4:7) = true;
+m = evaluateSegmentation(pred, gt);
+assert(m.tp == 9 && m.fp == 7 && m.fn == 7 && m.tn == 77, 'counts must be TP9 FP7 FN7 TN77');
+assert(m.nEmptyGT == 0, 'non-empty GT flagged empty');
+e = evaluateSegmentation(false(4,4), false(4,4));
+assert(e.dice == 1.0 && e.iou == 1.0, 'empty-empty must be perfect');
+assert(isnan(e.sensitivity) && isnan(e.precision), 'empty-empty sens/prec must be NaN');
+fp1 = false(10,10); fp1(1,1) = true;
+f = evaluateSegmentation(fp1, false(10,10));
+assert(f.dice == 0.0 && f.fp == 1, 'single FP on empty GT must score dice 0');
+% Batch: macro inflated by empty-correct vs pooled pixel reality.
+b = evaluateSegmentation({false(8,8), pred(1:8,1:8)}, {false(8,8), gt(1:8,1:8)});
+assert(b.n == 2 && b.nEmpty == 1 && b.nEmptyCorrect == 1, 'empty audit mismatch');
+assert(b.mean.dice > b.pooled.dice, 'macro should exceed pooled when an empty-correct image is present');
+end
+
+% ------------------------------------------------------------------
+function localTestSegSplit()
+% Seeded determinism + no group crosses the split.
+paths = arrayfun(@(i) sprintf('img_%03d.jpg', i), 1:60, 'UniformOutput', false);
+masks = arrayfun(@(i) sprintf('mask_%03d.png', i), 1:60, 'UniformOutput', false);
+patientOf = @(p) sprintf('patient_%02d', mod(sscanf(p(5:7), '%d'), 20));
+[t1, v1, ~] = splitSegmentationDataset(paths, masks, 'Seed', 123, 'PatientIdFcn', patientOf, 'TargetName', 'test');
+[t2, v2, ~] = splitSegmentationDataset(paths, masks, 'Seed', 123, 'PatientIdFcn', patientOf, 'TargetName', 'test');
+assert(isequal(t1.imagePaths, t2.imagePaths) && isequal(v1.imagePaths, v2.imagePaths), 'same seed must give same split');
+% Leakage audit.
+gTr = cellfun(patientOf, t1.imagePaths, 'UniformOutput', false);
+gVa = cellfun(patientOf, v1.imagePaths, 'UniformOutput', false);
+assert(isempty(intersect(unique(gTr), unique(gVa))), 'no patient may appear on both sides');
+end
+
+% ------------------------------------------------------------------
+function localTestSegPairing()
+% Stem pairing (case-insensitive, sorted) + orphan error. Uses temp dirs
+% so no fixture data is committed (see .gitignore *.png).
+imgDir = [tempname '_img']; maskDir = [tempname '_mask'];
+mkdir(imgDir); mkdir(maskDir);
+cleanup = onCleanup(@() rmdir(imgDir, 's')); %#ok<NASGU>
+cleanup2 = onCleanup(@() rmdir(maskDir, 's')); %#ok<NASGU>
+imwrite(uint8(zeros(8,8)), fullfile(imgDir, 'STARE_01.jpg'));
+imwrite(uint8(zeros(8,8)), fullfile(imgDir, 'stare_02.jpg'));
+imwrite(uint8(zeros(8,8)), fullfile(maskDir, 'stare_02.PNG'));
+imwrite(uint8(zeros(8,8)), fullfile(maskDir, 'STARE_01.png'));
+[ip, mp, rep] = buildSegmentationFileLists(imgDir, maskDir, 'test');
+assert(numel(ip) == 2 && rep.nPaired == 2, 'expected 2 pairs');
+% Orphan must error, not silently misalign.
+imwrite(uint8(zeros(8,8)), fullfile(imgDir, 'orphan.jpg'));
+threw = false;
+try
+    buildSegmentationFileLists(imgDir, maskDir, 'test');
+catch
+    threw = true;
+end
+assert(threw, 'orphan image must raise, not silently shift pairing');
 end
