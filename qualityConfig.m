@@ -33,7 +33,8 @@ cfg.borderlineEntropyMargin = 0.10;  % 10% above entropyThresh
 
 % --- ROI detection ---
 cfg.roiSeedThresh       = 12;   % grayFull > 12 seed (was inline)
-cfg.roiErodeDisk        = 8;    % imerode disk radius (edge-shave)
+cfg.roiErodeDisk        = 8;    % floor for edge-shave radius (px)
+cfg.roiErodeRelFrac     = 0.007;% + 0.7% of ROI diameter, so 4288px IDRiD gets ~20px shave not 8px
 cfg.roiMinCoverageFrac  = 0.05; % ROI must cover >=5% of frame else degenerate
 cfg.roiCircularityMin   = 0.55; % 4*pi*Area/Perim^2 lower bound for fundus FOV
 

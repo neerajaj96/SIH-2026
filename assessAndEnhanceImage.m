@@ -100,15 +100,19 @@ roiMask = grayFull > cfg0.roiSeedThresh;
 roiMask = imfill(roiMask, 'holes');
 cc = bwconncomp(roiMask);
 if cc.NumObjects > 1
+    % Largest component wins: dust specks, sticker tags, and light-leak
+    % corners are orders of magnitude smaller than the fundus disc, so
+    % picking the max implicitly rejects anything below speckFrac scale.
     sizes = cellfun(@numel, cc.PixelIdxList);
     [~, biggest] = max(sizes);
     roiMask = false(size(roiMask));
     roiMask(cc.PixelIdxList{biggest}) = true;
 end
-% Pull the mask in from the circle's hard edge - the boundary between
-% black background and tissue is itself a sharp edge that would otherwise
-% inflate the focus score without saying anything about retinal focus.
-roiMask = imerode(roiMask, strel('disk', cfg0.roiErodeDisk));
+% Edge-shave scales with resolution: floor 8px preserves validated 1280px
+% behaviour (~8px), large IDRiD frames get proportionally more.
+roiDiaEst = sqrt(4 * nnz(roiMask) / pi);
+erodeR = max(cfg0.roiErodeDisk, round(cfg0.roiErodeRelFrac * roiDiaEst));
+roiMask = imerode(roiMask, strel('disk', erodeR));
 if ~any(roiMask(:))
     roiMask = true(size(grayFull)); % degenerate input (all-black/all-white) - fall back rather than crash
 end
