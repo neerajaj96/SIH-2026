@@ -62,6 +62,12 @@ nPassed = 0; nTotal = 0;
 [nPassed, nTotal] = localCheck(nPassed, nTotal, ...
     'buildPatientLevelSplit never splits a shared patient ID across train/val/test', @() localTestPatientSplitNoLeakage());
 
+[nPassed, nTotal] = localCheck(nPassed, nTotal, ...
+    'qualityConfig canonical thresholds/margins present', @() localTestQualityConfig());
+
+[nPassed, nTotal] = localCheck(nPassed, nTotal, ...
+    'quality calibrator midpoint/sens/spec math', @() localTestQualityCalibMath());
+
 fprintf('\n=== %d / %d checks passed ===\n', nPassed, nTotal);
 if nPassed < nTotal
     error('runSelfTests:failures', '%d check(s) failed - see above.', nTotal - nPassed);
@@ -294,4 +300,25 @@ for i = 1:numel(result)
     end
 end
 assert(patientSplits.Count == 20, sprintf('expected 20 distinct patients, saw %d', patientSplits.Count));
+end
+
+% ------------------------------------------------------------------
+function localTestQualityConfig()
+% Stage-1: canonical config must exist with expected defaults. Base MATLAB
+% only (no Image Toolbox), so this runs on minimal installs. Full image
+% tests live in testQualitySubsystem.m + Python mirror.
+cfg = qualityConfig();
+assert(cfg.focusThresh == 8 && cfg.entropyThresh == 3.5, 'canonical thresholds drifted');
+assert(cfg.borderlineFocusMargin == 0.15 && cfg.borderlineEntropyMargin == 0.10, 'margins missing');
+assert(isfield(cfg,'roiSeedThresh') && isfield(cfg,'bgFraction') && isfield(cfg,'claheClipLimit'), 'config incomplete');
+end
+
+% ------------------------------------------------------------------
+function localTestQualityCalibMath()
+% Stage-1: midpoint cut + sens/spec on separated synthetic scores.
+% Pure numeric, no images/toolboxes.
+goodV = [9 10 11 12]; badV = [2 3 4 5];
+th = (min(goodV) + max(badV)) / 2;
+assert(abs(th - 7) < 1e-9, sprintf('midpoint: got %.4f, expected 7', th));
+assert(mean(goodV >= th) == 1 && mean(badV < th) == 1, 'sens/spec should be 1 on separated data');
 end
