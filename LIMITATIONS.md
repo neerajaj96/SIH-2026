@@ -58,7 +58,14 @@ documented but couldn't find.
 - Temperature calibration (`calibrateTemperature.m`) is a real,
   implemented, tested function — but it has to actually be *run* on a
   held-out validation split before `production_inference.m` stops
-  reporting confidence as an "UNCALIBRATED PLACEHOLDER."
+  reporting confidence as an "UNCALIBRATED PLACEHOLDER." Artifacts carry
+  provenance + reliability tables; loaders reject mismatches (see
+  `STAGE5_EXPLAINABILITY_HANDOFF.md`). No ECE/NLL/reliability numbers
+  exist until that run.
+- Grad-CAM explanations are reliability-gated (`explainGradCAM.m`) but
+  unvalidated against annotated lesions: heatmaps on the 5-channel
+  fusion input cannot prove lesion causality, and the exact feature
+  layer is auto-selected until confirmed via `net.Layers` in MATLAB.
 - The baseline-vs-pipeline ablation (`compareModels.m`, with Wilson-score
   confidence intervals) is fully wired and tested — but needs both
   `train_DR_Grader.m` and `train_Baseline_ResNet50.m` actually run first.

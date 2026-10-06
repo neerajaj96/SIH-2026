@@ -278,7 +278,7 @@ def test_audit_findings():
     check("batch CSV carries qualityDecision/qualityReasons",
           "qualityDecision" in batch and "qualityReasons" in batch, "BORDERLINE invisible in triage")
     check("batch first-12 columns unchanged (append-only)",
-          "cell(n,14)" in batch.replace(" ", ""), "column drift")
+          "cell(n,15)" in batch.replace(" ", "") and "qualityDecision" in batch and "ruleStatus" in batch, "column drift")
     check("batch counts BORDERLINE separately",
           "BORDERLINE" in batch, "no borderline triage count")
     # temp serial includes byte size (defect C fix)
