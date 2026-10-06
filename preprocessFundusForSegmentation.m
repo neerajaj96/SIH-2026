@@ -42,11 +42,11 @@ function [imgOut, roiMaskOut] = preprocessFundusForSegmentation(rawImage, netInp
 %
 % INPUTS:
 %   rawImage     - RGB or grayscale fundus image, any resolution
-%   netInputSize - [H W], default [512 512]. MUST match imageSize(1:2) in
-%                  train_UNet_Segmentation.m and the default in
-%                  runSegmentationNet.m - this is one logical constant
-%                  currently duplicated in three places; if you ever
-%                  change it, change it in all three.
+%   netInputSize - [H W], default segmentationConfig.inputSize ([512 512]).
+%                  MUST match the size passed to runSegmentationNet.m at
+%                  inference - both default to the same config, so this
+%                  holds unless a caller overrides one side explicitly
+%                  (which logs a warning - see below).
 %
 % OUTPUTS:
 %   imgOut     - enhanced grayscale image resized to netInputSize, single
@@ -58,8 +58,9 @@ function [imgOut, roiMaskOut] = preprocessFundusForSegmentation(rawImage, netInp
 %
 % Requires: Image Processing Toolbox, and assessAndEnhanceImage.m on the path.
 
+cfgDefault = segmentationConfig();
 if nargin < 2 || isempty(netInputSize)
-    netInputSize = [512 512];
+    netInputSize = cfgDefault.inputSize;
 end
 
 % -Inf thresholds: this call site NEVER rejects, it only enhances - see
@@ -67,7 +68,16 @@ end
 % not baked into this function.
 [~, ~, enhancedGray, ~, ~, roiMask] = assessAndEnhanceImage(rawImage, -Inf, -Inf);
 
+% Parity contract with runSegmentationNet.m (inference): image = bilinear,
+% mask = nearest, scale = single/255. Both files read segmentationConfig;
+% change inputSize there, not here. An explicit non-default netInputSize
+% is honored (for the 512-vs-768 benchmark) but logged.
+if ~isequal(netInputSize, cfgDefault.inputSize)
+    fprintf(['preprocessFundusForSegmentation: non-default netInputSize [%d %d] ' ...
+             '(config default [%d %d]) - ensure runSegmentationNet is called with the same size.\n'], ...
+        netInputSize(1), netInputSize(2), cfgDefault.inputSize(1), cfgDefault.inputSize(2));
+end
 imgResized = imresize(enhancedGray, netInputSize, 'bilinear');
-roiMaskOut = imresize(roiMask, netInputSize, 'nearest');
+roiMaskOut = logical(imresize(roiMask, netInputSize, 'nearest'));
 imgOut = single(imgResized) / 255;
 end
