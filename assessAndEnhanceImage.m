@@ -139,12 +139,25 @@ roiDiameter = sqrt(4 * nnz(roiMask) / pi); % equivalent-circle diameter of the d
 bgRadius = max(round(cfg0.bgFraction * roiDiameter), cfg0.bgFloorPx); % fraction of ROI diameter, floored so tiny/degenerate ROIs don't collapse
 structuringElement = strel('disk', bgRadius);
 
+% Enhancement guardrail: probe gray ROI contrast BEFORE CLAHE. Flat
+% (noisy/low-light) images get halved ClipLimit so CLAHE does not turn
+% sensor noise into phantom texture; tiny thumbnails skip non-local-means
+% denoise which would erase 1-2px vessels. Normal images take the exact
+% legacy path (ClipLimit 0.01 + denoise).
+grayROI = double(grayFull(roiMask)) / 255;
+flatContrast = prctile(grayROI, 95) - prctile(grayROI, 5);
+cfgEnh = cfg0;
+if flatContrast < cfg0.enhanceFlatThresh
+    cfgEnh.claheClipLimit = cfg0.enhanceFlatClip;
+end
+cfgEnh.doDenoise = roiDiameter >= cfg0.denoiseMinDiameter;
+
 greenChannel = rawImage(:,:,2);
 greenBackground = imopen(greenChannel, structuringElement);
 % ...via DIVISION (flat-fielding), not subtraction. Subtraction clips
 % straight to 0 in already-dim areas (common in the fundus periphery);
 % division rescales instead of crushing them to black.
-enhancedGray = localFlatFieldClaheDenoise(greenChannel, greenBackground, roiMask, cfg0);
+enhancedGray = localFlatFieldClaheDenoise(greenChannel, greenBackground, roiMask, cfgEnh);
 enhancedGray(~roiMask) = 0;
 
 % ...then the same correction is applied per-channel so the classifier
@@ -154,7 +167,7 @@ enhancedRGB = rawImage;
 for c = 1:3
     chan = rawImage(:,:,c);
     bg = imopen(chan, structuringElement);
-    enhancedRGB(:,:,c) = localFlatFieldClaheDenoise(chan, bg, roiMask, cfg0);
+    enhancedRGB(:,:,c) = localFlatFieldClaheDenoise(chan, bg, roiMask, cfgEnh);
 end
 for c = 1:3
     chanMasked = enhancedRGB(:,:,c);
@@ -174,7 +187,11 @@ end
 flatField = min(flatField ./ normalizer, 1);
 flatFieldU8 = im2uint8(flatField);
 claheChan = adapthisteq(flatFieldU8, 'ClipLimit', cfg.claheClipLimit, 'NumTiles', cfg.claheNumTiles);
-out = imnlmfilt(claheChan);
+if isfield(cfg, 'doDenoise') && ~cfg.doDenoise
+    out = claheChan;
+else
+    out = imnlmfilt(claheChan);
+end
 end
 
 % ------------------------------------------------------------------

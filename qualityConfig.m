@@ -47,6 +47,9 @@ cfg.bgFraction = 0.05;      % structuring element = 5% of ROI diameter
 cfg.bgFloorPx  = 15;        % floor so tiny ROIs do not collapse
 cfg.claheClipLimit = 0.01;
 cfg.claheNumTiles  = [8 8];
+cfg.enhanceFlatThresh = 0.12;   % gray ROI P95-P5 below this => flat/noisy: halve CLAHE to avoid noise amplification
+cfg.enhanceFlatClip   = 0.005;  % reduced ClipLimit for flat images
+cfg.denoiseMinDiameter = 256;   % skip imnlmfilt below this ROI diameter (oversmooths tiny thumbs)
 
 % --- Extended quality metrics (assessFundusQuality.m) ---
 cfg.illumLowPctl   = 5;     % V-channel low percentile for illumination
