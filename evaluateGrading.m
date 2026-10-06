@@ -32,9 +32,15 @@ function results = evaluateGrading(yTrue, yPred, probs, varargin)
 p = inputParser();
 p.addParameter('TargetName', 'grader', @(s) ischar(s) || isstring(s));
 p.addParameter('WilsonAlpha', 0.05, @isnumeric);
+p.addParameter('ReferableThreshold', [], @isnumeric);
 p.parse(varargin{:});
 opt = p.Results;
 targetName = char(opt.TargetName);
+refThr = opt.ReferableThreshold;
+if isempty(refThr)
+    gc = gradingConfig(); % frozen ICDR referable cut (currently grade >= 2)
+    refThr = gc.referableThreshold;
+end
 
 yTrue = yTrue(:); yPred = yPred(:);
 n = numel(yTrue);
@@ -82,8 +88,8 @@ weightedF1 = sum(f1vals(~isnan(f1vals)) .* supports(~isnan(f1vals))) / max(sum(s
 % QWK (shared verified implementation).
 qwk = computeQWK(yTrue, yPred, 5);
 
-% Referable DR (grade >= 2, the PS clinical target) + Wilson CIs.
-trueRef = yTrue >= 2; predRef = yPred >= 2;
+% Referable DR (grade >= refThr, the PS clinical target) + Wilson CIs.
+trueRef = yTrue >= refThr; predRef = yPred >= refThr;
 tp = sum(trueRef & predRef); fn = sum(trueRef & ~predRef);
 tn = sum(~trueRef & ~predRef); fp = sum(~trueRef & predRef);
 sens = tp / max(tp + fn, 1); spec = tn / max(tn + fp, 1);

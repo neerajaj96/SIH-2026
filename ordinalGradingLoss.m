@@ -10,7 +10,8 @@ function [loss, parts] = ordinalGradingLoss(Y, T, classValues, lambda, classWeig
 %   loss   = mean(crossentropy(Y,T),'all') + lambda * mean((E_pred-E_true).^2,'all')
 %
 % SCALE AUDIT (why lambda=0.5 is a starting point, not a truth):
-%   CE per sample in [0, ~1.6] for 5 classes (uniform = log(5)=1.61).
+%   CE per sample is -log p_true: ~0 when confident-correct, 1.61 at
+%   uniform, unbounded above when confident-wrong (e.g. 2.30 at p=0.1).
 %   Penalty per sample in [0, 16] (grade distance 0..4, squared).
 %   With lambda=0.5 the penalty contributes up to 8.0 - it CAN dominate CE
 %   on far misses by design (a 0-vs-4 error must hurt more than 3-vs-4),
