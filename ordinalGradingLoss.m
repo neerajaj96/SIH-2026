@@ -1,0 +1,88 @@
+function [loss, parts] = ordinalGradingLoss(Y, T, classValues, lambda)
+% ordinalGradingLoss: Audited hybrid loss for ICDR grading (Stage-3 P3).
+% Preserves the project's existing idea (categorical cross-entropy + soft
+% ordinal expected-class penalty) but fixes its undocumented scale,
+% shape and stability assumptions.
+%
+% FORMULATION (frozen):
+%   E_pred = sum_c Y(c,:) .* classValues(c)      % softmax expected grade
+%   E_true = sum_c T(c,:) .* classValues(c)      % one-hot true grade
+%   loss   = mean(crossentropy(Y,T),'all') + lambda * mean((E_pred-E_true).^2,'all')
+%
+% SCALE AUDIT (why lambda=0.5 is a starting point, not a truth):
+%   CE per sample in [0, ~1.6] for 5 classes (uniform = log(5)=1.61).
+%   Penalty per sample in [0, 16] (grade distance 0..4, squared).
+%   With lambda=0.5 the penalty contributes up to 8.0 - it CAN dominate CE
+%   on far misses by design (a 0-vs-4 error must hurt more than 3-vs-4),
+%   but on near misses (d=1 -> 0.5) it is comparable to CE. Tune lambda
+%   ONLY on validation (never test); log both components via parts.
+%
+% GRADIENT (bounded, no explosion):
+%   d(penalty)/dY(c,i) = 2*lambda*(E_pred(i)-E_true(i))*classValues(c)/N.
+%   |E diff|<=4, |c|<=4 -> |grad| <= 32*lambda/N per element. Linear in Y,
+%   no exp/log pathologies beyond CE's own (handled by crossentropy).
+%
+% EXTREME vs ADJACENT (the point of the hybrid):
+%   CE alone: P(true)=0.1 gives -log(.1)=2.30 whether the mass sits on a
+%   neighbor or 4 grades away. Penalty adds 0.5*d^2 in expectation shift -
+%   quadratic in distance, so far misses dominate. Adjacent confusion still
+%   trains (CE nonzero) but no longer equals a dangerous miss.
+%
+% STABILITY: Y must be post-softmax probabilities in [0,1] with columns
+% summing to 1 (tolerance 1e-3); T one-hot columns summing to 1. Anything
+% else (logits, unnormalized scores) errors loudly instead of training on
+% a meaningless value. crossentropy() itself handles log(0) internally;
+% inputs are additionally clamped to [1e-12, 1] for the diagnostic NLL.
+%
+% INPUTS:
+%   Y - dlarray/single [C N] or [C 1 N], C==5 softmax probabilities
+%   T - same size one-hot targets
+%   classValues - [C 1] single(0:4)' (default gradingConfig)
+%   lambda - scalar >=0 (default gradingConfig.ordinalLambda 0.5)
+%
+% OUTPUTS:
+%   loss  - scalar dlarray/single (trainnet-compatible single output)
+%   parts - struct .ce, .penalty, .lambda (diagnostics; ignored by trainnet)
+%
+% Requires: Deep Learning Toolbox (crossentropy, dlarray).
+
+if nargin < 3 || isempty(classValues)
+    g = gradingConfig();
+    classValues = g.classValues;
+end
+if nargin < 4 || isempty(lambda)
+    g = gradingConfig();
+    lambda = g.ordinalLambda;
+end
+assert(isscalar(lambda) && lambda >= 0, ...
+    'ordinalGradingLoss:badLambda', 'lambda must be scalar >=0, got %s.', mat2str(lambda));
+
+C = size(Y, 1);
+assert(C == 5, 'ordinalGradingLoss:channels - expected 5-class dim1, got %d.', C);
+assert(isequal(size(Y), size(T)), ...
+    'ordinalGradingLoss:sizeMismatch - Y %s vs T %s.', mat2str(size(Y)), mat2str(size(T)));
+
+dY = extractdata(Y); dT = extractdata(T);
+if any(dY(:) < -1e-3) || any(dY(:) > 1 + 1e-3)
+    error(['ordinalGradingLoss:notProbabilities - Y outside [0,1] (min %.3f max %.3f). ' ...
+           'Pass post-softmax probabilities, not logits.'], min(dY(:)), max(dY(:)));
+end
+colSumY = sum(dY, 1);
+if any(abs(colSumY(:) - 1) > 1e-3)
+    error(['ordinalGradingLoss:notNormalized - Y columns must sum to 1 (softmax). ' ...
+           'Worst deviation %.4f. Check the dr_fc+prob head.'], max(abs(colSumY(:) - 1)));
+end
+colSumT = sum(dT, 1);
+if any(abs(colSumT(:) - 1) > 1e-3)
+    error('ordinalGradingLoss:notOneHot - T columns must sum to 1 (one-hot).');
+end
+
+ce = mean(crossentropy(Y, T), 'all');
+expectedPred = sum(Y .* classValues, 1);
+expectedTrue = sum(T .* classValues, 1);
+penalty = mean((expectedPred - expectedTrue).^2, 'all');
+loss = ce + lambda * penalty;
+if nargout > 1
+    parts = struct('ce', extractdata(ce), 'penalty', extractdata(penalty), 'lambda', lambda);
+end
+end
