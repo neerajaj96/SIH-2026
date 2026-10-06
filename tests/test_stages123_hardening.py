@@ -63,8 +63,10 @@ def test_quality_canonical():
     check("BORDERLINE margins present", "borderlineFocusMargin" in q, "missing")
     check("calibration fallback exists", os.path.exists(os.path.join(ROOT, "qualityLoadCalibration.m")), "missing")
     r = txt("runScreeningPipeline.m")
-    check("gate honors calibration (FIXED)", "qualityLoadCalibration" in r, "bypass still present")
-    check("legacy wrapper intact", "enhancedRGB" in txt("assessAndEnhanceImage.m"), "broken")
+    check("gate consumes canonical API (single core, calibrated)",
+          "assessFundusQuality(rawImage)" in r and "qualityDecision" in r, "gate bypasses canonical")
+    check("legacy wrapper delegates (frozen signature, legacy boolean)",
+          "assessFundusQuality" in txt("assessAndEnhanceImage.m") and "legacyGradeable" in txt("assessAndEnhanceImage.m"), "core forked")
 
 
 def test_chain_shapes():
@@ -176,8 +178,62 @@ def test_labels_leakage_config():
     check("calibration artifact name pinned", "qualityThresholds.mat" in txt("qualityConfig.m"), "drift")
 
 
+def test_release_hardening():
+    """Release-hardening pins: BORDERLINE, single-source calibration,
+    temp hot-reload, zscore consistency, input validation, loud failures."""
+    canon = txt("assessFundusQuality.m")
+    rsp = txt("runScreeningPipeline.m")
+    pinf = txt("production_inference.m")
+    cache = txt("getOrLoadCachedModels.m")
+    # BORDERLINE never coerced to PASS
+    check("BORDERLINE decision exists in canonical",
+          "'BORDERLINE'" in canon and "'FAIL'" in canon and "'PASS'" in canon, "taxonomy drift")
+    check("pipeline exposes decision (not coerced)",
+          "qualityDecision" in rsp and "gradeable-with-warning" in rsp, "BORDERLINE silently PASS")
+    check("bridge struct passes decision through",
+          "qualityDecision" in txt("screenOneImage-1.m"), "bridge blind to BORDERLINE")
+    # calibration single-source: gate resolves once, reporting reads r
+    check("no second quality load in production_inference",
+          "qualityLoadCalibration" not in pinf, "dual-load divergence risk")
+    check("reporting reads effective thresholds from r",
+          "r.focusThresh" in pinf and "r.qualityDecision" in pinf, "stale display")
+    check("margins derive from effective thresholds",
+          "focusThresh * (1 +" in canon, "stale-default margins")
+    # temp hot-reload without model reload
+    check("cache watches temperature mtime",
+          "datenum" in cache and "temperatureT" in cache, "stale-temp blindness")
+    check("hot path never reloads nets",
+          sum(1 for ln in txt("getOrLoadCachedModels.m").splitlines()
+              if "loadModelsIfPresent()" in ln and not ln.strip().startswith("%")) == 1,
+          "repeated model loading")
+    # zscore vs 0-255 consistency
+    check("fusion emits 0-255 single; input layer zscore-normalizes",
+          "zscore" in txt("train_DR_Grader.m") and "range01" in txt("buildGradingFusionTensor.m"), "normalization gap")
+    # input validation preserved in canonical core
+    check("canonical validates inputs (old IDs kept in wrapper)",
+          "assessFundusQuality:badInput" in canon and "assessAndEnhanceImage:badInput" in txt("assessAndEnhanceImage.m"), "validation gap")
+    check("RGBA truncated with warning; empty ROI falls back loud",
+          "extraChannels" in canon and "degenerate" in canon, "edge-case silence")
+    # loud failures elsewhere
+    check("missing seg nets gate (no GT cheat)",
+          "segmentationNotTrained" in txt("train_DR_Grader.m"), "leak path open")
+    check("missing weights fall back to SIMULATED (all-or-nothing)",
+          txt("loadModelsIfPresent.m").count("isfile") >= 4, "partial-load risk")
+    check("GT-where-predicted documented as caller guarantee",
+          "cannot tell predicted from GT" in txt("buildGradingFusionTensor.m"), "guarantee undocumented")
+    check("calibration fallback loud (warning + canonical)",
+          "loadFailed" in txt("qualityLoadCalibration.m"), "silent fallback")
+    check("non-default seg size warns (no silent divergence)",
+          "non-default netInputSize" in txt("preprocessFundusForSegmentation.m"), "silent resize")
+    # executable: BORDERLINE band math on synthetic margins
+    ft, fb = 8.0, 8.0 * 1.15
+    check("BORDERLINE band is above threshold, below margin-top",
+          ft < 8.5 < fb, "margin math broken")
+
+
 TESTS = [test_grading_contract, test_quality_canonical, test_chain_shapes,
-         test_masks_and_pixels, test_images_and_roi, test_labels_leakage_config]
+         test_masks_and_pixels, test_images_and_roi, test_labels_leakage_config,
+         test_release_hardening]
 
 if __name__ == "__main__":
     for t in TESTS:

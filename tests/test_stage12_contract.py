@@ -43,9 +43,16 @@ def test_quality_call_sites():
     rsp = txt("runScreeningPipeline.m")
     pre = txt("preprocessFundusForSegmentation.m")
     grd = txt("train_DR_Grader.m")
-    check("gate reads qualityConfig (no 8/3.5 literal at call)",
-          "qualityConfig" in rsp and "assessAndEnhanceImage(rawImage, 8, 3.5)" not in rsp,
-          "runScreeningPipeline must use qcfg, not literals")
+    canon = txt("assessFundusQuality.m")
+    legacy = txt("assessAndEnhanceImage.m")
+    check("gate consumes canonical struct API (single core)",
+          "assessFundusQuality(rawImage)" in rsp, "gate must call canonical")
+    check("legacy wrapper delegates to canonical (no forked core)",
+          "assessFundusQuality" in legacy and "legacyGradeable" in legacy, "core forked")
+    check("canonical reads qualityConfig + calibration (single source)",
+          "qualityConfig" in canon and "qualityLoadCalibration" in canon, "config bypass")
+    check("no 8/3.5 literals at gate call",
+          "assessAndEnhanceImage(rawImage, 8, 3.5)" not in rsp, "literal gate")
     check("train/infer enhance-only via -Inf (curation upstream)",
           "-Inf, -Inf" in pre and "-Inf, -Inf" in grd,
           "preprocess + grader fusion must be enhance-only")
@@ -56,11 +63,14 @@ def test_quality_call_sites():
 
 def test_legacy_compat_preserved():
     body = txt("assessAndEnhanceImage.m")
+    canon = txt("assessFundusQuality.m")
     check("legacy 6-output signature intact",
           "isGradeable, enhancedRGB, enhancedGray, focusScore, entropyScore, roiMask" in body.replace("\n", " "),
           "signature drift breaks Stage-2 callers")
-    check("background-zero semantics intact",
-          body.count("~roiMask") >= 2 and "= 0" in body,
+    check("legacy error IDs preserved",
+          "assessAndEnhanceImage:badInput" in body, "error contract broken")
+    check("background-zero semantics intact in canonical core",
+          canon.count("~roiMask") >= 2 and "= 0" in canon,
           "enhanced images must mask background to 0")
 
 
@@ -84,12 +94,14 @@ def test_interp_and_shapes():
     grd = txt("train_DR_Grader.m")
     builder = txt("buildGradingFusionTensor.m")
     gcfg = txt("gradingConfig.m")
-    # Training path delegates to canonical builder (Stage-3); inference
-    # path inlines identical semantics (deliberate, header-documented).
-    check("fusion masks nearest (inference inline + builder/config)",
-          rsp.count("'nearest'") >= 2 and "'nearest'" in gcfg and "maskInterp" in builder, "masks must be nearest")
-    check("fusion photos bilinear (inference inline + builder/config)",
-          "'bilinear'" in rsp and "'bilinear'" in gcfg and "photoInterp" in builder, "photos must be bilinear")
+    # BOTH paths consume the single canonical builder (inference was
+    # inlined pre-hardening; now unified). Builder reads interp from config.
+    check("both paths use canonical fusion builder",
+          "buildGradingFusionTensor" in rsp and "buildGradingFusionTensor" in grd, "fork persists")
+    check("fusion masks nearest (builder + config)",
+          "'nearest'" in gcfg and "maskInterp" in builder, "masks must be nearest")
+    check("fusion photos bilinear (builder + config)",
+          "'bilinear'" in gcfg and "photoInterp" in builder, "photos must be bilinear")
     # executable shape proof on synthetic 96px frame
     img = I.fundus(96, 96, 34)
     g = I.gray(img)
