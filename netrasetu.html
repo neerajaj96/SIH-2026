@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NetraSetu — DR Screening Console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#F6FAFA; --surface:#FFFFFF; --ink:#0F2E33; --ink-soft:#4C6A6E; --line:#DCE8E8;
+  --teal:#0E5C63; --teal-deep:#0A3238; --teal-tint:#E7F1F1;
+  --coral:#C7402B; --coral-tint:#FBEAE7;
+  --amber:#A86A11; --amber-tint:#FBF1DF;
+  --sage:#2E7D5B; --sage-tint:#E7F3ED;
+  --focus:#0E5C63;
+  --font-head:'Manrope',system-ui,sans-serif; --font-body:'IBM Plex Sans',system-ui,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0B1E21; --surface:#102A2E; --ink:#EAF3F3; --ink-soft:#9BBBBE; --line:#1D3B40;
+    --teal:#4FB3BA; --teal-deep:#0A3238; --teal-tint:#123339;
+    --coral:#E8806C; --coral-tint:#2B1815;
+    --amber:#E0A94A; --amber-tint:#2B2213;
+    --sage:#69C79A; --sage-tint:#122A20;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0B1E21; --surface:#102A2E; --ink:#EAF3F3; --ink-soft:#9BBBBE; --line:#1D3B40;
+  --teal:#4FB3BA; --teal-deep:#0A3238; --teal-tint:#123339;
+  --coral:#E8806C; --coral-tint:#2B1815;
+  --amber:#E0A94A; --amber-tint:#2B2213;
+  --sage:#69C79A; --sage-tint:#122A20;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--font-body);line-height:1.5;-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font-family:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+@media (prefers-reduced-motion: reduce){*{animation-duration:0.001ms !important;transition-duration:0.001ms !important}}
+
+.topbar{display:flex;align-items:center;gap:20px;padding:14px 20px;background:var(--surface);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--font-head);font-weight:800;font-size:19px;color:var(--teal-deep)}
+:root[data-theme="dark"] .brand, @media (prefers-color-scheme:dark){:root:not([data-theme=light]) .brand{color:var(--ink)}}
+.brand .mark{width:30px;height:30px;border-radius:9px;background:var(--teal);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.brand .mark svg{width:17px;height:17px}
+.brand .sub{font-family:var(--font-body);font-weight:400;font-size:12px;color:var(--ink-soft);margin-top:1px}
+.roles{display:flex;gap:4px;background:var(--paper);padding:4px;border-radius:11px;margin-left:auto}
+.roles button{border:none;background:transparent;padding:9px 15px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;color:var(--ink-soft);transition:background .15s,color .15s}
+.roles button.active{background:var(--teal);color:#fff}
+.demo-badge{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--amber);background:var(--amber-tint);padding:6px 11px;border-radius:100px;white-space:nowrap}
+.demo-badge .dot{width:6px;height:6px;border-radius:50%;background:var(--amber)}
+
+main{max-width:1040px;margin:0 auto;padding:28px 20px 80px}
+.view{display:none}
+.view.active{display:block}
+h1{font-family:var(--font-head);font-size:26px;font-weight:800;margin:0 0 6px;letter-spacing:-0.01em}
+.lede{color:var(--ink-soft);font-size:15px;margin:0 0 26px;max-width:62ch}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:22px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+@media (max-width:760px){.grid2{grid-template-columns:1fr}}
+
+label{display:block;font-size:13px;font-weight:600;color:var(--ink-soft);margin-bottom:6px}
+input[type=text]{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--paper);font-size:15px;margin-bottom:16px}
+
+.dropzone{border:1.5px dashed var(--line);border-radius:12px;padding:26px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s;background:var(--paper)}
+.dropzone:hover,.dropzone.drag{border-color:var(--teal);background:var(--teal-tint)}
+.dropzone svg{width:30px;height:30px;color:var(--ink-soft);margin-bottom:8px}
+.dropzone p{margin:0;font-size:14px;color:var(--ink-soft)}
+.dropzone p b{color:var(--ink)}
+.preview{display:flex;align-items:center;gap:14px}
+.preview img{width:84px;height:84px;object-fit:cover;border-radius:10px;border:1px solid var(--line)}
+.preview .name{font-size:14px;font-weight:600}
+.preview .swap{font-size:13px;color:var(--teal);background:none;border:none;cursor:pointer;padding:0;margin-top:4px;font-weight:600}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:none;border-radius:10px;padding:12px 20px;font-size:15px;font-weight:700;cursor:pointer;font-family:var(--font-head)}
+.btn-primary{background:var(--teal);color:#fff;width:100%;margin-top:18px}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed}
+.btn-ghost{background:transparent;color:var(--teal);border:1px solid var(--line)}
+
+.pipeline{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:20px 0}
+.stage{padding:12px 10px;border-radius:10px;background:var(--paper);border:1px solid var(--line);text-align:center;opacity:.4;transition:opacity .3s,background .3s,border-color .3s}
+.stage.active{opacity:1;background:var(--teal-tint);border-color:var(--teal)}
+.stage.done{opacity:1}
+.stage .n{font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:2px}
+.stage .l{font-size:12.5px;font-weight:600}
+
+.result{margin-top:18px;padding-top:18px;border-top:1px solid var(--line)}
+.badge{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:700;padding:5px 12px;border-radius:100px}
+.badge-referable{background:var(--coral-tint);color:var(--coral)}
+.badge-clear{background:var(--sage-tint);color:var(--sage)}
+.badge-pending{background:var(--amber-tint);color:var(--amber)}
+.grade-row{display:flex;align-items:baseline;gap:10px;margin:14px 0 6px}
+.grade-num{font-family:var(--font-head);font-size:40px;font-weight:800;color:var(--teal-deep)}
+:root[data-theme=dark] .grade-num{color:var(--ink)}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]) .grade-num{color:var(--ink)}}
+.grade-label{font-size:16px;font-weight:600}
+.confidence{font-size:13px;color:var(--ink-soft)}
+.flag-box{display:flex;gap:10px;align-items:flex-start;background:var(--coral-tint);color:var(--coral);border-radius:10px;padding:12px 14px;margin-top:12px;font-size:13.5px;font-weight:500;line-height:1.4}
+.flag-box svg{width:17px;height:17px;flex-shrink:0;margin-top:1px}
+.evidence{margin-top:14px}
+.evidence h4{font-size:13px;font-weight:700;margin:0 0 6px;color:var(--ink-soft)}
+.evidence ul{margin:0;padding-left:18px;font-size:13.5px}
+.evidence li{margin-bottom:4px}
+
+.queue-item{display:flex;align-items:center;gap:14px;padding:14px;border:1px solid var(--line);border-radius:12px;margin-bottom:10px;cursor:pointer;background:var(--surface);transition:border-color .15s}
+.queue-item:hover{border-color:var(--teal)}
+.queue-item img{width:52px;height:52px;border-radius:9px;object-fit:cover;flex-shrink:0}
+.queue-item .meta{flex:1;min-width:0}
+.queue-item .pid{font-weight:700;font-size:14.5px}
+.queue-item .when{font-size:12.5px;color:var(--ink-soft)}
+.queue-empty{text-align:center;padding:50px 20px;color:var(--ink-soft)}
+.queue-empty svg{width:34px;height:34px;margin-bottom:10px;opacity:.5}
+
+.detail-overlay{position:fixed;inset:0;background:rgba(10,30,33,.5);display:flex;align-items:flex-end;justify-content:center;z-index:50}
+@media (min-width:760px){.detail-overlay{align-items:center}}
+.detail-panel{background:var(--surface);width:100%;max-width:560px;max-height:90vh;overflow-y:auto;border-radius:16px 16px 0 0;padding:24px}
+@media (min-width:760px){.detail-panel{border-radius:16px}}
+.detail-close{float:right;border:none;background:var(--paper);width:32px;height:32px;border-radius:50%;cursor:pointer;font-size:16px;color:var(--ink-soft)}
+.compare{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0}
+.compare .col{background:var(--paper);border-radius:10px;padding:12px}
+.compare .col h5{margin:0 0 4px;font-size:11.5px;font-weight:700;color:var(--ink-soft);text-transform:none}
+.compare .col .val{font-family:var(--font-head);font-size:24px;font-weight:800}
+textarea{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--paper);font-size:14px;min-height:64px;resize:vertical;margin-bottom:10px}
+select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--paper);font-size:14px;margin-bottom:12px}
+
+.stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}
+@media (max-width:700px){.stat-row{grid-template-columns:repeat(2,1fr)}}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;border-left:3px solid var(--teal)}
+.stat.c-coral{border-left-color:var(--coral)}
+.stat.c-amber{border-left-color:var(--amber)}
+.stat.c-sage{border-left-color:var(--sage)}
+.stat .num{font-family:var(--font-head);font-size:28px;font-weight:800}
+.stat .lbl{font-size:12.5px;color:var(--ink-soft);margin-top:2px}
+
+.plan-table{width:100%;border-collapse:collapse;font-size:13.5px}
+.plan-table th{text-align:left;font-size:12px;color:var(--ink-soft);font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line)}
+.plan-table td{padding:9px 10px;border-bottom:1px solid var(--line)}
+.plan-table tr:last-child td{border-bottom:none}
+
+.offline-note{background:var(--amber-tint);color:var(--amber);border-radius:10px;padding:12px 14px;font-size:13.5px;margin-bottom:20px}
+.section-gap{margin-top:34px}
+.small-h{font-size:14px;font-weight:700;margin:0 0 12px}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3" fill="white" stroke="none"/></svg></div>
+    <div><div>NetraSetu</div><div class="sub">DR screening &amp; referral console</div></div>
+  </div>
+  <div class="roles" role="tablist" aria-label="Role">
+    <button data-view="screen" class="active" role="tab" aria-selected="true">Screening</button>
+    <button data-view="review" role="tab" aria-selected="false">Review queue</button>
+    <button data-view="admin" role="tab" aria-selected="false">Capacity</button>
+  </div>
+  <div class="demo-badge"><span class="dot"></span>Demo mode — illustrative results</div>
+</div>
+
+<main>
+
+<!-- ============ SCREENING VIEW ============ -->
+<section class="view active" id="view-screen">
+  <h1>Screen a fundus photo</h1>
+  <p class="lede">For use at a primary healthcare centre. Capture or upload one eye at a time; a referable result is added to the ophthalmologist queue automatically.</p>
+  <div class="grid2">
+    <div class="card">
+      <label for="pid">Patient ID</label>
+      <input type="text" id="pid" placeholder="e.g. PHC-0042" autocomplete="off">
+      <label>Fundus photo</label>
+      <div id="dropzone" class="dropzone">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg>
+        <p><b>Tap to upload</b> or drag a photo here</p>
+      </div>
+      <div id="previewWrap" style="display:none" class="preview">
+        <img id="previewImg" alt="">
+        <div><div class="name" id="previewName"></div><button class="swap" id="swapBtn">Choose a different photo</button></div>
+      </div>
+      <input type="file" id="fileInput" accept="image/*" style="display:none">
+      <button class="btn btn-primary" id="runBtn" disabled>Run screening</button>
+    </div>
+    <div class="card" id="resultCard">
+      <div class="pipeline" id="pipeline">
+        <div class="stage" data-i="0"><div class="n">1</div><div class="l">Quality gate</div></div>
+        <div class="stage" data-i="1"><div class="n">2</div><div class="l">Segmentation</div></div>
+        <div class="stage" data-i="2"><div class="n">3</div><div class="l">Grading</div></div>
+        <div class="stage" data-i="3"><div class="n">4</div><div class="l">Explainability</div></div>
+      </div>
+      <div id="resultBody" style="color:var(--ink-soft);font-size:14px">Result appears here once a screening runs.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ REVIEW QUEUE VIEW ============ -->
+<section class="view" id="view-review">
+  <h1>Referral queue</h1>
+  <p class="lede">Cases graded Level 2 and above, or flagged for a disagreement or attention check, wait here for a human read.</p>
+  <div id="offlineNoteReview"></div>
+  <div id="queueList"></div>
+  <div class="section-gap">
+    <h2 class="small-h">Reviewed</h2>
+    <div id="reviewedList"></div>
+  </div>
+</section>
+
+<!-- ============ ADMIN / CAPACITY VIEW ============ -->
+<section class="view" id="view-admin">
+  <h1>Capacity &amp; throughput</h1>
+  <p class="lede">Live counts from today's queue, alongside the staffing plan computed from the screening program's own numbers.</p>
+  <div id="offlineNoteAdmin"></div>
+  <div class="stat-row" id="statRow"></div>
+  <div class="card">
+    <h2 class="small-h" style="margin-bottom:4px">Reviewers needed, by review speed</h2>
+    <p style="font-size:13px;color:var(--ink-soft);margin:0 0 16px">Erlang-C queueing model. Referable rate sourced from a real India DR-screening study (14.1% of gradable images), not assumed.</p>
+    <table class="plan-table">
+      <thead><tr><th>Scenario</th><th>30-second review</th><th>2-minute review</th></tr></thead>
+      <tbody>
+        <tr><td>Baseline — 100,000 patients/yr</td><td>1 reviewer</td><td>1 reviewer</td></tr>
+        <tr><td>District scale-up — 2,000,000 patients/yr, weaker triage</td><td>3 reviewers</td><td>11 reviewers</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+</main>
+
+<div id="detailMount"></div>
+
+<script>
+(function(){
+'use strict';
+
+/* ---------- capability + state ---------- */
+let db = null;
+let dbReady = (async () => {
+  try { db = (window.claude && window.claude.use) ? await window.claude.use('db') : null; }
+  catch(e){ db = null; }
+  return db;
+})();
+
+const state = { cases: [], selectedFile: null, uploadCount: 0 };
+
+/* ---------- role switching ---------- */
+document.querySelectorAll('.roles button').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.roles button').forEach(b=>{b.classList.remove('active');b.setAttribute('aria-selected','false');});
+    btn.classList.add('active'); btn.setAttribute('aria-selected','true');
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+    document.getElementById('view-'+btn.dataset.view).classList.add('active');
+  });
+});
+
+/* ---------- mock scenario bank (deterministic, cycles per upload) ---------- */
+const CLASS_NAMES = ['No DR','Mild NPDR','Moderate NPDR','Severe NPDR','Proliferative DR'];
+const SCENARIOS = [
+  { dl:0, conf:0.94, rule:0, evidence:['No visible DR abnormalities detected.'], nv:false, gradCamOnDisc:false },
+  { dl:1, conf:0.88, rule:1, evidence:['Microaneurysms only.'], nv:false, gradCamOnDisc:false },
+  { dl:2, conf:0.85, rule:2, evidence:['Lesions present beyond microaneurysms (hemorrhage counts by quadrant: [3 1 0 0]; exudates present: 1), but below Severe NPDR criteria.'], nv:false, gradCamOnDisc:false },
+  { dl:3, conf:0.91, rule:3, evidence:['Severe hemorrhages (>20) in all 4 quadrants (counts: [25 22 30 21]) — the "4" of the 4-2-1 rule.'], nv:false, gradCamOnDisc:false },
+  { dl:3, conf:0.79, rule:2, evidence:['Lesions present beyond microaneurysms (hemorrhage counts by quadrant: [9 4 2 0]; exudates present: 1), but below Severe NPDR criteria.'], nv:false, gradCamOnDisc:false, disagree:true },
+  { dl:4, conf:0.89, rule:4, evidence:['Neovascularization flagged by the vessel density/tortuosity screen — Proliferative DR criterion.'], nv:true, gradCamOnDisc:false },
+  { dl:2, conf:0.71, rule:2, evidence:['Lesions present beyond microaneurysms (hemorrhage counts by quadrant: [4 2 1 0]; exudates present: 0), but below Severe NPDR criteria.'], nv:false, gradCamOnDisc:true },
+];
+
+function hashSeed(str){ let h=0; for(let i=0;i<str.length;i++){ h=(h*31+str.charCodeAt(i))|0; } return Math.abs(h); }
+
+/* ---------- upload UI ---------- */
+const dropzone=document.getElementById('dropzone'), fileInput=document.getElementById('fileInput');
+const previewWrap=document.getElementById('previewWrap'), previewImg=document.getElementById('previewImg'), previewName=document.getElementById('previewName');
+const runBtn=document.getElementById('runBtn'), swapBtn=document.getElementById('swapBtn');
+
+dropzone.addEventListener('click', ()=>fileInput.click());
+dropzone.addEventListener('dragover', e=>{e.preventDefault(); dropzone.classList.add('drag');});
+dropzone.addEventListener('dragleave', ()=>dropzone.classList.remove('drag'));
+dropzone.addEventListener('drop', e=>{
+  e.preventDefault(); dropzone.classList.remove('drag');
+  if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', ()=>{ if(fileInput.files[0]) handleFile(fileInput.files[0]); });
+swapBtn.addEventListener('click', ()=>fileInput.click());
+
+function handleFile(file){
+  state.selectedFile = file;
+  const reader = new FileReader();
+  reader.onload = e=>{
+    previewImg.src = e.target.result;
+    previewName.textContent = file.name;
+    dropzone.style.display='none'; previewWrap.style.display='flex';
+    runBtn.disabled=false;
+    resetPipeline();
+  };
+  reader.readAsDataURL(file);
+}
+
+function resizeToThumb(dataUrl, size){
+  return new Promise(resolve=>{
+    const img=new Image();
+    img.onload=()=>{
+      const c=document.createElement('canvas'); c.width=size; c.height=size;
+      const ctx=c.getContext('2d');
+      const s=Math.min(img.width,img.height);
+      ctx.drawImage(img,(img.width-s)/2,(img.height-s)/2,s,s,0,0,size,size);
+      resolve(c.toDataURL('image/jpeg',0.55));
+    };
+    img.onerror=()=>resolve(null);
+    img.src=dataUrl;
+  });
+}
+
+/* ---------- pipeline animation ---------- */
+function resetPipeline(){
+  document.querySelectorAll('#pipeline .stage').forEach(s=>{s.classList.remove('active','done');});
+  document.getElementById('resultBody').innerHTML = 'Result appears here once a screening runs.';
+}
+function stepPipeline(i){
+  return new Promise(resolve=>{
+    setTimeout(()=>{
+      const el=document.querySelector('#pipeline .stage[data-i="'+i+'"]');
+      el.classList.add('active');
+      setTimeout(()=>{ el.classList.remove('active'); el.classList.add('done'); resolve(); }, 420);
+    }, i===0?80:120);
+  });
+}
+
+runBtn.addEventListener('click', async ()=>{
+  runBtn.disabled=true;
+  resetPipeline();
+  for(let i=0;i<4;i++){ await stepPipeline(i); }
+
+  const pid = document.getElementById('pid').value.trim() || 'unspecified';
+  const seed = hashSeed(pid + state.selectedFile.name + state.selectedFile.size + (state.uploadCount++));
+  const sc = SCENARIOS[seed % SCENARIOS.length];
+  const thumb = await resizeToThumb(previewImg.src, 160);
+  renderResult(sc, pid);
+
+  if (sc.dl >= 2 || sc.rule >= 2 || sc.disagree || sc.gradCamOnDisc) {
+    await submitCase(pid, thumb, sc);
+  }
+  runBtn.disabled=false;
+});
+
+function gradeBadge(n){
+  if(n>=2) return '<span class="badge badge-referable">Referable — Level '+n+'+</span>';
+  return '<span class="badge badge-clear">Not referable</span>';
+}
+
+function renderResult(sc, pid){
+  const disagree = sc.dl !== sc.rule;
+  let html = '';
+  html += '<div class="result">';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:12.5px;color:var(--ink-soft);font-weight:600">Quality gate</span><span class="badge badge-clear" style="font-size:11.5px">Passed</span></div>';
+  html += '<div class="grade-row"><span class="grade-num">'+sc.dl+'</span><span class="grade-label">'+CLASS_NAMES[sc.dl]+'</span></div>';
+  html += '<div class="confidence">Calibrated confidence '+Math.round(sc.conf*100)+'% &middot; deep-learning pathway</div>';
+  html += gradeBadge(Math.max(sc.dl,sc.rule));
+  html += '<div class="evidence"><h4>Clinical rule engine (independent second opinion)</h4><ul>';
+  sc.evidence.forEach(ev=>{ html += '<li>'+ev+'</li>'; });
+  html += '</ul></div>';
+  if(disagree){
+    html += '<div class="flag-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L2.5 17a2 2 0 001.7 3h15.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>Deep-learning grade (Level '+sc.dl+') and rule-engine grade (Level '+sc.rule+') disagree — routed for manual review.</div>';
+  }
+  if(sc.gradCamOnDisc){
+    html += '<div class="flag-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L2.5 17a2 2 0 001.7 3h15.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>Grad-CAM attention falls on the optic disc rather than a lesion site — possible spurious prediction, routed for manual review.</div>';
+  }
+  if(sc.nv){
+    html += '<div class="flag-box" style="background:var(--amber-tint);color:var(--amber)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>Neovascularization screen flagged (vessel density/tortuosity) — screening signal, not a standalone diagnosis.</div>';
+  }
+  html += '<p style="font-size:12px;color:var(--ink-soft);margin-top:14px">Patient '+escapeHtml(pid)+' &middot; demo scenario, not a live model call — see the note below.</p>';
+  html += '</div>';
+  document.getElementById('resultBody').innerHTML = html;
+}
+
+function escapeHtml(s){ return s.replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* ---------- shared queue (db) ---------- */
+async function submitCase(pid, thumb, sc){
+  await dbReady;
+  if(!db) return;
+  try{
+    await db.collection('cases').add({
+      patientId: pid, thumb: thumb, submittedAt: Date.now(),
+      dlGrade: sc.dl, confidence: sc.conf, ruleGrade: sc.rule, evidence: sc.evidence,
+      disagree: sc.dl!==sc.rule, gradCamOnDisc: !!sc.gradCamOnDisc, nvFlagged: !!sc.nv,
+      status: 'pending', reviewerGrade: null, reviewerNotes: '', reviewedAt: null
+    });
+  }catch(e){ console.warn('submitCase failed', e); }
+}
+
+let unsubQueue=null;
+async function initQueue(){
+  await dbReady;
+  const noteReview=document.getElementById('offlineNoteReview');
+  const noteAdmin=document.getElementById('offlineNoteAdmin');
+  if(!db){
+    const msg='<div class="offline-note">Shared queue isn\'t reachable in this view — cases submitted from the Screening tab in this same browser session won\'t sync here. Open this artifact directly in Claude to use the live queue.</div>';
+    noteReview.innerHTML=msg; noteAdmin.innerHTML=msg;
+    renderQueue([]); renderStats([]);
+    return;
+  }
+  try{
+    unsubQueue = db.collection('cases').orderBy('submittedAt','desc').limit(150).onSnapshot(snap=>{
+      state.cases = snap.docs.map(d=>({id:d.id, ...d.data()}));
+      renderQueue(state.cases);
+      renderStats(state.cases);
+    }, err=>{ console.warn('queue snapshot error', err); });
+  }catch(e){ console.warn('queue subscribe failed', e); renderQueue([]); renderStats([]); }
+}
+
+function timeAgo(ts){
+  const s=Math.floor((Date.now()-ts)/1000);
+  if(s<60) return 'just now';
+  if(s<3600) return Math.floor(s/60)+' min ago';
+  return Math.floor(s/3600)+' hr ago';
+}
+
+function renderQueue(cases){
+  const pending = cases.filter(c=>c.status==='pending');
+  const reviewed = cases.filter(c=>c.status==='reviewed');
+  const q=document.getElementById('queueList');
+  if(pending.length===0){
+    q.innerHTML='<div class="queue-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg><div>Queue is empty — nothing waiting on a human read.</div></div>';
+  } else {
+    q.innerHTML = pending.map(c=>{
+      const flags=[c.disagree?'disagreement':null, c.gradCamOnDisc?'attention check':null, c.nvFlagged?'NV screen':null].filter(Boolean);
+      return '<div class="queue-item" data-id="'+c.id+'">'+
+        (c.thumb?'<img src="'+c.thumb+'" alt="">':'<div style="width:52px;height:52px;border-radius:9px;background:var(--paper)"></div>')+
+        '<div class="meta"><div class="pid">'+escapeHtml(c.patientId)+'</div><div class="when">'+timeAgo(c.submittedAt)+(flags.length?' &middot; '+flags.join(', '):'')+'</div></div>'+
+        gradeBadge(Math.max(c.dlGrade,c.ruleGrade))+
+      '</div>';
+    }).join('');
+    q.querySelectorAll('.queue-item').forEach(el=>el.addEventListener('click', ()=>openDetail(el.dataset.id)));
+  }
+  const rl=document.getElementById('reviewedList');
+  rl.innerHTML = reviewed.length? reviewed.map(c=>
+    '<div class="queue-item" style="cursor:default;opacity:.75">'+
+    (c.thumb?'<img src="'+c.thumb+'" alt="">':'<div style="width:52px;height:52px;border-radius:9px;background:var(--paper)"></div>')+
+    '<div class="meta"><div class="pid">'+escapeHtml(c.patientId)+'</div><div class="when">reviewed as Level '+c.reviewerGrade+'</div></div>'+
+    '</div>'
+  ).join('') : '<p style="color:var(--ink-soft);font-size:13.5px">No cases reviewed yet.</p>';
+}
+
+function openDetail(id){
+  const c = state.cases.find(x=>x.id===id);
+  if(!c) return;
+  const mount=document.getElementById('detailMount');
+  mount.innerHTML = '<div class="detail-overlay" id="ov"><div class="detail-panel">'+
+    '<button class="detail-close" id="closeBtn">&times;</button>'+
+    '<h2 style="margin:0 0 4px;font-size:19px;font-weight:800;font-family:var(--font-head)">'+escapeHtml(c.patientId)+'</h2>'+
+    '<p style="color:var(--ink-soft);font-size:13px;margin:0 0 4px">Submitted '+timeAgo(c.submittedAt)+'</p>'+
+    (c.thumb?'<img src="'+c.thumb+'" style="width:100%;max-width:220px;border-radius:10px;margin:10px 0" alt="">':'')+
+    '<div class="compare"><div class="col"><h5>Deep learning</h5><div class="val">'+c.dlGrade+'</div><div style="font-size:12px;color:var(--ink-soft)">'+CLASS_NAMES[c.dlGrade]+' &middot; '+Math.round(c.confidence*100)+'% conf.</div></div>'+
+    '<div class="col"><h5>Clinical rule engine</h5><div class="val">'+c.ruleGrade+'</div><div style="font-size:12px;color:var(--ink-soft)">'+CLASS_NAMES[c.ruleGrade]+'</div></div></div>'+
+    (c.disagree?'<div class="flag-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/></svg>Grades disagree — treat with extra scrutiny.</div>':'')+
+    (c.gradCamOnDisc?'<div class="flag-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/></svg>Grad-CAM attention lands on the optic disc — possible spurious call.</div>':'')+
+    '<div class="evidence"><h4>Evidence</h4><ul>'+c.evidence.map(e=>'<li>'+e+'</li>').join('')+'</ul></div>'+
+    '<label style="margin-top:14px">Confirmed grade</label>'+
+    '<select id="overrideGrade">'+[0,1,2,3,4].map(n=>'<option value="'+n+'"'+(n===c.dlGrade?' selected':'')+'>Level '+n+' — '+CLASS_NAMES[n]+'</option>').join('')+'</select>'+
+    '<label>Notes for the record</label><textarea id="reviewNotes" placeholder="Optional"></textarea>'+
+    '<button class="btn btn-primary" id="confirmBtn">Confirm &amp; mark reviewed</button>'+
+  '</div></div>';
+  document.getElementById('closeBtn').addEventListener('click', ()=>mount.innerHTML='');
+  document.getElementById('ov').addEventListener('click', e=>{ if(e.target.id==='ov') mount.innerHTML=''; });
+  document.getElementById('confirmBtn').addEventListener('click', async ()=>{
+    const grade = parseInt(document.getElementById('overrideGrade').value,10);
+    const notes = document.getElementById('reviewNotes').value;
+    if(db){
+      try{ await db.doc('cases/'+c.id).update({status:'reviewed', reviewerGrade:grade, reviewerNotes:notes, reviewedAt:Date.now()}); }
+      catch(e){ console.warn('review update failed', e); }
+    }
+    mount.innerHTML='';
+  });
+}
+
+/* ---------- admin stats ---------- */
+function renderStats(cases){
+  const total=cases.length;
+  const pending=cases.filter(c=>c.status==='pending').length;
+  const referable=cases.filter(c=>Math.max(c.dlGrade,c.ruleGrade)>=2).length;
+  const flagged=cases.filter(c=>c.disagree||c.gradCamOnDisc).length;
+  const row=document.getElementById('statRow');
+  row.innerHTML =
+    '<div class="stat"><div class="num">'+total+'</div><div class="lbl">Cases screened</div></div>'+
+    '<div class="stat c-coral"><div class="num">'+referable+'</div><div class="lbl">Referable</div></div>'+
+    '<div class="stat c-amber"><div class="num">'+pending+'</div><div class="lbl">Awaiting review</div></div>'+
+    '<div class="stat c-sage"><div class="num">'+flagged+'</div><div class="lbl">Safety flags raised</div></div>';
+}
+
+initQueue();
+})();
+</script>
+</body>
+</html>

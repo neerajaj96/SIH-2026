@@ -1,0 +1,23 @@
+# MATLAB / data / credentials
+*.mat
+*.asv
+*.m~
+data/
+*.jpg
+*.jpeg
+*.png
+!netrasetu.html
+calibrated_temperature.mat
+
+# Python (bridge_server.py)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
