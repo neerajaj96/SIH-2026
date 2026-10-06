@@ -26,27 +26,30 @@ if isempty(cachedModels)
     cachedTempSerial = localTempSerial();
 end
 models = cachedModels;
+% Forward-compat: caches created before calibrationState existed gain it
+% here (revalidated, not assumed).
+if models.haveTrainedModels && ~isfield(models, 'calibrationState')
+    [t0, s0] = localValidateTemp();
+    models.temperatureT = t0; models.calibrationState = s0;
+    cachedModels.temperatureT = t0; cachedModels.calibrationState = s0;
+end
 % Temperature hot-reload: calibration is a tiny scalar .mat, so re-check
-% its timestamp on every call and refresh ONLY the scalar when it
-% changes - networks are never reloaded (no repeated model loading).
+% its serial on every call and refresh ONLY the scalar + match state when
+% it changes - networks are never reloaded (no repeated model loading).
 % Without this, recalibration required a bridge restart to take effect.
+% Validation mirrors loadModelsIfPresent (finite T>0, class-order match).
 if models.haveTrainedModels
     cur = localTempSerial();
     if ~isequal(cur, cachedTempSerial)
-        if isfile('calibrated_temperature.mat')
-            try
-                S = load('calibrated_temperature.mat','temperatureT');
-                models.temperatureT = S.temperatureT;
-                cachedModels.temperatureT = S.temperatureT;
-            catch
-            end
-        else
-            models.temperatureT = 1.5;
-            cachedModels.temperatureT = 1.5;
-        end
+        [tNew, stateNew] = localValidateTemp();
+        models.temperatureT = tNew;
+        models.calibrationState = stateNew;
+        cachedModels.temperatureT = tNew;
+        cachedModels.calibrationState = stateNew;
         cachedTempSerial = cur;
     else
         models.temperatureT = cachedModels.temperatureT;
+        models.calibrationState = cachedModels.calibrationState;
     end
 end
 end
@@ -61,5 +64,30 @@ if isfile('calibrated_temperature.mat')
     s = sprintf('%.6f_%d', d.datenum, d.bytes);
 else
     s = '';
+end
+end
+
+function [t, state] = localValidateTemp()
+% Same acceptance rules as loadModelsIfPresent (kept in sync; contract
+% tests pin both spellings): finite T>0 + class-order match =>
+% CALIBRATED_VALID; present-but-bad => CALIBRATED_MISMATCH + fallback;
+% absent => UNCALIBRATED_FALLBACK.
+t = 1.5; state = 'UNCALIBRATED_FALLBACK';
+if ~isfile('calibrated_temperature.mat')
+    return;
+end
+try
+    S = load('calibrated_temperature.mat');
+    okT = isfield(S,'temperatureT') && isscalar(S.temperatureT) && isfinite(S.temperatureT) && S.temperatureT > 0;
+    okCls = ~isfield(S,'calibrationProvenance') || ...
+        (isequal(S.calibrationProvenance.numClasses, 5) && isequal(S.calibrationProvenance.classOrdering(:), (0:4)'));
+    if okT && okCls
+        t = S.temperatureT;
+        state = 'CALIBRATED_VALID';
+    else
+        state = 'CALIBRATED_MISMATCH';
+    end
+catch
+    state = 'CALIBRATED_MISMATCH';
 end
 end

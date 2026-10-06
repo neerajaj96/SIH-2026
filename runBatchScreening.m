@@ -28,7 +28,8 @@ function summaryTable = runBatchScreening(imagesDir, outputDir)
 %     confidence, icdrGrade_clinicalRules, gradesAgree, nvFlagged,
 %     gradCamOnDisc, referable (either grade >= 2), status, errorMessage,
 %     qualityDecision (PASS/BORDERLINE/FAIL/ERROR - filter triage on this,
-%     not status alone), qualityReasons (| -joined, may be empty)
+%     not status alone), qualityReasons (| -joined, may be empty),
+%     ruleStatus (SUFFICIENT/INSUFFICIENT_EVIDENCE/PROXY/INVALID)
 %
 % Requires: same toolboxes as production_inference.m.
 
@@ -52,13 +53,19 @@ if ~haveTrainedModels
 end
 
 n = numel(files);
-rows = cell(n, 14);
+rows = cell(n, 15);
+ruleStatuses = cell(n, 1);
 for i = 1:n
     fname = files(i).name;
     res = screenOneImage(fullfile(files(i).folder, fname), models);
+    ruleStatuses{i} = res.ruleStatus;
 
     icdrDL = res.dl; icdrRule = res.rule;
-    agree = NaN; if ~isnan(icdrDL), agree = double(icdrDL == icdrRule); end
+    % gradesAgree is NaN unless BOTH grades exist: a NaN rule grade means
+    % INSUFFICIENT_EVIDENCE, which must never be counted as disagreement.
+    % Insufficient-evidence cases get their own count below (nInsufficient).
+    agree = NaN;
+    if ~isnan(icdrDL) && ~isnan(icdrRule), agree = double(icdrDL == icdrRule); end
     nvFlag = double(res.nv);
     onDisc = double(res.gradCamOnDisc);
     referable = NaN;
@@ -67,7 +74,7 @@ for i = 1:n
         referable = double(bestGrade >= 2);
     end
     rows(i,:) = {fname, res.status, res.focus, res.entropy, icdrDL, res.conf, icdrRule, agree, nvFlag, onDisc, referable, res.errorMessage, ...
-        res.qualityDecision, strjoin(res.qualityReasons, ' | ')};
+        res.qualityDecision, strjoin(res.qualityReasons, ' | '), res.ruleStatus};
 
     if mod(i,50) == 0 || i == n
         fprintf('  %d/%d processed\n', i, n);
@@ -76,7 +83,7 @@ end
 
 summaryTable = cell2table(rows, 'VariableNames', {'filename','status','focus','entropy', ...
     'icdrGrade_deepLearning','confidence','icdrGrade_clinicalRules','gradesAgree', ...
-    'nvFlagged','gradCamOnDisc','referable','errorMessage','qualityDecision','qualityReasons'});
+    'nvFlagged','gradCamOnDisc','referable','errorMessage','qualityDecision','qualityReasons','ruleStatus'});
 
 outCsv = fullfile(outputDir, sprintf('batch_summary_%s.csv', datestr(now,'yyyymmdd_HHMMSS')));
 writetable(summaryTable, outCsv);
@@ -87,10 +94,13 @@ nError = sum(strcmp(summaryTable.status,'error'));
 nBorderline = sum(strcmp(summaryTable.qualityDecision,'BORDERLINE'));
 nReferable = sum(summaryTable.referable == 1);
 nDisagree = sum(summaryTable.gradesAgree == 0);
+% Insufficient-evidence triage is disjoint from disagreement: NaN rule
+% grades never enter nDisagree (gradesAgree is NaN there by construction).
+nInsufficient = sum(strcmp(ruleStatuses, 'INSUFFICIENT_EVIDENCE'));
 nFlaggedGradCam = sum(summaryTable.gradCamOnDisc == 1);
 
 fprintf('\n=== Batch complete: %s ===\n', outCsv);
-fprintf('Processed: %d | Ungradeable: %d | Errors: %d | BORDERLINE (gradeable-with-warning): %d\n', nOk, nUngradeable, nError, nBorderline);
+fprintf('Processed: %d | Ungradeable: %d | Errors: %d | BORDERLINE (gradeable-with-warning): %d | INSUFFICIENT_EVIDENCE rule: %d\n', nOk, nUngradeable, nError, nBorderline, nInsufficient);
 if haveTrainedModels
     fprintf('Referable (Level 2+): %d | AI/rule-engine disagreements: %d | Grad-CAM-on-disc flags: %d\n', ...
         nReferable, nDisagree, nFlaggedGradCam);

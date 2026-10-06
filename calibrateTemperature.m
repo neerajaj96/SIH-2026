@@ -1,4 +1,4 @@
-function [temperatureT, report] = calibrateTemperature(valLogits, valLabels, calFilePath)
+function [temperatureT, report] = calibrateTemperature(valLogits, valLabels, calFilePath, varargin)
 % calibrateTemperature: Fits the softmax temperature T on HELD-OUT
 % VALIDATION logits/labels by minimizing negative log-likelihood, and
 % reports Expected Calibration Error (ECE) before and after scaling.
@@ -44,14 +44,34 @@ function [temperatureT, report] = calibrateTemperature(valLogits, valLabels, cal
 %                 'calibrated_temperature.mat' in the current folder -
 %                 production_inference.m looks for exactly this filename
 %                 next to itself.
+%   'DatasetTag' - identity of the validation split fitted on
+%                 (default 'unspecified'; pass e.g. 'DDR-val' or
+%                 'Messidor2-heldout'). NEVER fit on test data.
+%   'ModelTag'  - identity of the graded model (default 'unspecified';
+%                 pass e.g. 'trained_dr_grader.mat'). Load-time matching
+%                 uses this + class ordering to reject stale artifacts.
 %
 % OUTPUTS:
 %   temperatureT - the fitted scalar T*
 %   report       - struct: .eceBefore .eceAfter .nllBefore .nllAfter
 %                  .accuracy (unaffected by T, reported for context) .n
+%                  .reliability (table: binLower/binUpper/meanConfidence/
+%                  accuracy/sampleCount per bin, post-scaling)
+%
+% ARTIFACT PROVENANCE: the .mat stores temperatureT, calibrationReport
+% (with reliability table) and calibrationProvenance (modelTag,
+% datasetTag, classOrdering [0..4], numClasses 5, timestamp, fitter
+% version). Loaders must validate class ordering/count against the
+% live model (CALIBRATED_VALID vs CALIBRATED_MISMATCH) - isfile() alone
+% never proves the artifact belongs to this exact model.
 %
 % Requires: nothing beyond base MATLAB (fminbnd is core MATLAB, not
 % Optimization Toolbox).
+
+p = inputParser;
+addParameter(p, 'DatasetTag', 'unspecified', @ischar);
+addParameter(p, 'ModelTag', 'unspecified', @ischar);
+parse(p, varargin{:});
 
 if nargin < 3 || isempty(calFilePath)
     calFilePath = 'calibrated_temperature.mat';
@@ -89,7 +109,12 @@ if report.eceAfter >= report.eceBefore
 end
 
 calibrationReport = report; %#ok<NASGU> - saved under this name so production_inference.m's load() call finds it
-save(calFilePath, 'temperatureT', 'calibrationReport');
+calibrationProvenance = struct('modelTag', p.Results.ModelTag, 'datasetTag', p.Results.DatasetTag, ...
+    'classOrdering', 0:4, 'numClasses', 5, 'timestamp', datestr(now, 30), ...
+    'fitter', 'calibrateTemperature.m (NLL/fminbnd)', 'fitterVersion', '1.1.0-stage5');
+report.reliability = localReliability(probsTstar, valLabels);
+calibrationReport.reliability = report.reliability;
+save(calFilePath, 'temperatureT', 'calibrationReport', 'calibrationProvenance');
 fprintf('Saved %s - production_inference.m will pick this up automatically.\n', calFilePath);
 end
 
@@ -108,6 +133,33 @@ idx = sub2ind(size(p), (1:n)', labels(:)+1); % +1: labels are 0-indexed ICDR gra
 nll = -mean(log(p(idx) + 1e-12));
 end
 
+% ------------------------------------------------------------------
+function rel = localReliability(probs, labels, numBins)
+% Per-bin reliability table backing the ECE number: columns binLower /
+% binUpper / meanConfidence / accuracy / sampleCount. Empty bins get
+% NaN statistics with sampleCount 0 (never silently dropped).
+if nargin < 3 || isempty(numBins)
+    numBins = 15;
+end
+[confidences, predClass0] = max(probs, [], 2);
+correct = (predClass0 - 1) == labels(:);
+edges = linspace(0, 1, numBins+1);
+rel = repmat(struct('binLower',0,'binUpper',0,'meanConfidence',NaN,'accuracy',NaN,'sampleCount',0), numBins, 1);
+for i = 1:numBins
+    if i == 1
+        inBin = confidences >= edges(i) & confidences <= edges(i+1);
+    else
+        inBin = confidences > edges(i) & confidences <= edges(i+1);
+    end
+    rel(i).binLower = edges(i);
+    rel(i).binUpper = edges(i+1);
+    rel(i).sampleCount = sum(inBin);
+    if any(inBin)
+        rel(i).meanConfidence = mean(confidences(inBin));
+        rel(i).accuracy = mean(correct(inBin));
+    end
+end
+end
 % ------------------------------------------------------------------
 function e = localECE(probs, labels, numBins)
 % Standard binned Expected Calibration Error (Guo et al. 2017): split

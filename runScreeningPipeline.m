@@ -61,7 +61,10 @@ r = struct('status','ok','errorMessage','', 'focus',NaN,'entropy',NaN,'roiPassed
     'ruleGrade',NaN,'evidence',{{}}, 'ruleStatus','INSUFFICIENT_EVIDENCE','ruleTrigger','unevaluated', ...
     'haveTrainedModels',false, ...
     'dlGrade',NaN,'confidence',NaN,'scoreMap',[],'gradCamOnDisc',false, ...
-    'temperatureT',NaN,'temperatureCalibrated',false,'temperatureSource','simulated (no trained models)');
+    'explainStatus','UNAVAILABLE','explainReasons',{{}},'explainProvenance','no trained models (simulated)', ...
+    'temperatureT',NaN,'temperatureCalibrated',false,'temperatureState','UNAVAILABLE','temperatureSource','simulated (no trained models)', ...
+    'disagreement',struct('clinicalEvidenceStatus','INSUFFICIENT_EVIDENCE','gradeRelationship','NOT_COMPARABLE', ...
+        'confidenceStatus','UNCALIBRATED','explanationStatus','UNAVAILABLE','escalate',true,'reasons',{{'simulated mode'}}));
 
 if nargin < 2 || isempty(models)
     models = getOrLoadCachedModels();
@@ -167,7 +170,8 @@ try
         % Calibrated-ness = artifact presence in the model dir (same pwd
         % convention as loadModelsIfPresent); a fitted T==1.5 still counts.
         r.temperatureT = models.temperatureT;
-        r.temperatureCalibrated = isfile('calibrated_temperature.mat');
+        r.temperatureState = models.calibrationState;
+        r.temperatureCalibrated = strcmp(models.calibrationState, 'CALIBRATED_VALID');
         r.temperatureSource = 'model cache (getOrLoadCachedModels, hot-reloaded)';
         logits = predict(models.drNet, dlX, Outputs="dr_fc");
         probs = extractdata(softmax(logits ./ models.temperatureT));
@@ -175,13 +179,32 @@ try
         r.dlGrade = idx - 1;
         r.confidence = conf;
 
-        scoreMap = extractdata(gradCAM(models.drNet, dlX, idx, ReductionLayer="prob"));
-        r.scoreMap = scoreMap;
-        scoreMapFull = imresize(scoreMap, [size(enhancedRGB,1) size(enhancedRGB,2)]);
-        [~, peakIdx] = max(scoreMapFull(:));
-        [peakY, peakX] = ind2sub(size(scoreMapFull), peakIdx);
-        r.gradCamOnDisc = hypot(peakX-odCenter(1), peakY-odCenter(2)) < 1.5*odRadius && r.dlGrade ~= 4;
+        % Canonical explanation (ONLY Grad-CAM path): ROI-masked,
+        % reliability-gated, lesion-contextualized. Explanation failure
+        % never blocks the grade above.
+        [gradMap, gradRep] = explainGradCAM(models.drNet, dlX, idx, roiMask, lesionMask, odCenter, odRadius);
+        r.scoreMap = gradMap;
+        r.explainStatus = gradRep.status;
+        r.explainReasons = gradRep.reasons;
+        r.explainProvenance = gradRep.provenance;
+        % Legacy peak-on-disc flag preserved from the canonical peak
+        % (post-ROI-mask, so border peaks cannot trigger it).
+        if ~isempty(gradMap)
+            r.gradCamOnDisc = gradRep.peakInDiscZone && r.dlGrade ~= 4;
+        else
+            r.gradCamOnDisc = false;
+        end
     end
+    % Structured disagreement (orthogonal dimensions; missing evidence is
+    % NOT_COMPARABLE, never manufactured disagreement). Fallback T is
+    % never "calibrated": only CALIBRATED_VALID counts.
+    if strcmp(r.temperatureState, 'CALIBRATED_VALID')
+        confState = 'CALIBRATED';
+    else
+        confState = 'UNCALIBRATED';
+    end
+    r.disagreement = analyzeDisagreement(r.dlGrade, r.confidence, confState, ...
+        r.ruleGrade, r.ruleStatus, r.nvStatus, r.qualityDecision, r.explainStatus);
 catch ME
     r.status = 'error';
     r.errorMessage = ME.message;

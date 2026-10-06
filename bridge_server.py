@@ -97,6 +97,11 @@ def matlab_result_to_dict(m_result) -> dict:
     but confirm it against a real call before trusting this in
     production; adjust the field-by-field access below if your engine
     version behaves differently.
+
+    Schema: legacy keys (status..gradCamOnDisc) are frozen for
+    netrasetu.html compatibility; Stage-4/5 provenance keys
+    (qualityDecision/Reasons/Guidance/Calibrated, ruleStatus, nvStatus)
+    are additive via safe_get and read as None on older MATLAB code.
     """
     def safe_num(v):
         try:
@@ -104,6 +109,28 @@ def matlab_result_to_dict(m_result) -> dict:
             return None if f != f else f  # NaN -> None, JSON has no NaN
         except (TypeError, ValueError):
             return None
+
+    def safe_get(key, default=None):
+        # Additive Stage-4/5 fields may be absent on older MATLAB code -
+        # never KeyError the whole response for a missing optional key.
+        try:
+            return m_result[key]
+        except (KeyError, TypeError, IndexError):
+            return default
+
+    def safe_str(v):
+        try:
+            return str(v)
+        except (TypeError, ValueError):
+            return None
+
+    def safe_str_list(v):
+        if isinstance(v, str):
+            return [v]
+        try:
+            return [str(x) for x in list(v)]
+        except TypeError:
+            return []
 
     evidence = m_result["evidence"]
     if isinstance(evidence, str):
@@ -115,6 +142,7 @@ def matlab_result_to_dict(m_result) -> dict:
             evidence_list = []
 
     return {
+        # Legacy keys (frozen - netrasetu.html mock SCENARIOS shape).
         "status": str(m_result["status"]),
         "errorMessage": str(m_result["errorMessage"]),
         "focus": safe_num(m_result["focus"]),
@@ -126,6 +154,14 @@ def matlab_result_to_dict(m_result) -> dict:
         "evidence": evidence_list,
         "nv": bool(m_result["nv"]),
         "gradCamOnDisc": bool(m_result["gradCamOnDisc"]),
+        # Additive Stage-4/5 provenance keys (None when the MATLAB side
+        # predates them; never breaks old clients).
+        "qualityDecision": safe_str(safe_get("qualityDecision")),
+        "qualityReasons": safe_str_list(safe_get("qualityReasons", [])),
+        "qualityGuidance": safe_str_list(safe_get("qualityGuidance", [])),
+        "qualityCalibrated": (lambda v: None if v is None else bool(v))(safe_get("qualityCalibrated")),
+        "ruleStatus": safe_str(safe_get("ruleStatus")),
+        "nvStatus": safe_str(safe_get("nvStatus")),
     }
 
 

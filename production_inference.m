@@ -168,8 +168,14 @@ disp('Rendering supporting images...');
 landmarkPath = fullfile(scriptDir, 'dr_report_landmarks.png');
 fig = figure('Visible','off');
 imshow(enhancedRGB); hold on;
-plot(odCenter(1), odCenter(2), 'yo', 'MarkerSize', 15, 'LineWidth', 2);
-plot(foveaCenter(1), foveaCenter(2), 'co', 'MarkerSize', 15, 'LineWidth', 2);
+% NaN/unreliable landmarks: skip the marker (never crash rendering after
+% a successful screening) - unreliability is stated in the report text.
+if ~any(isnan(odCenter)) && ~strcmp(r.odValidity, 'UNRELIABLE')
+    plot(odCenter(1), odCenter(2), 'yo', 'MarkerSize', 15, 'LineWidth', 2);
+end
+if ~any(isnan(foveaCenter)) && ~strcmp(r.foveaValidity, 'UNRELIABLE')
+    plot(foveaCenter(1), foveaCenter(2), 'co', 'MarkerSize', 15, 'LineWidth', 2);
+end
 legend('Optic disc', 'Fovea', 'TextColor', 'white', 'Location', 'southoutside');
 hold off;
 exportgraphics(fig, landmarkPath);
@@ -179,11 +185,14 @@ lesionPath = fullfile(scriptDir, 'dr_report_lesion_mask.png');
 imwrite(lesionMask, lesionPath);
 
 gradcamPath = '';
-if haveTrainedModels
+if haveTrainedModels && ~isempty(scoreMap)
+    % Canonical explanation result (already ROI-masked at original
+    % resolution by explainGradCAM) - displayed as-is, no second
+    % computation or reinterpretation here.
     gradcamPath = fullfile(scriptDir, 'dr_report_gradcam.png');
     fig = figure('Visible','off');
     imshow(enhancedRGB); hold on;
-    imagesc(imresize(scoreMap, [size(enhancedRGB,1) size(enhancedRGB,2)]), 'AlphaData', 0.5);
+    imagesc(scoreMap, 'AlphaData', 0.5);
     colormap(fig, 'jet'); hold off;
     exportgraphics(fig, gradcamPath);
     close(fig);
@@ -216,6 +225,11 @@ if haveReportGen
         end
         add(rpt, Paragraph(sprintf('Quality gate: %s - focus=%.1f (threshold %.1f), entropy=%.2f (threshold %.2f)%s', ...
             r.qualityDecision, focus, focusThresh, ent, entropyThresh, ternary(r.qualityCalibrated, '', ' - UNCALIBRATED PLACEHOLDER, see calibrateQualityThresholds.m'))));
+        add(rpt, Paragraph(sprintf(['Evidence status - landmarks: OD %s / fovea %s (quadrants %s); ' ...
+            'clinical rule: %s; NV screen: %s; explanation: %s; temperature: %s; disagreement: %s%s.'], ...
+            r.odValidity, r.foveaValidity, r.quadrantValid, r.ruleStatus, r.nvStatus, ...
+            r.explainStatus, ternary(r.temperatureCalibrated, 'CALIBRATED', 'UNCALIBRATED_FALLBACK'), ...
+            r.disagreement.gradeRelationship, ternary(r.disagreement.escalate, ' - ESCALATE for human review', ''))));
 
         add(rpt, Chapter('Title', 'Rule-Based Clinical Grade (ICDR 4-2-1 criteria)'));
         if isnan(clinicalGrade)
@@ -279,8 +293,14 @@ if ~reportProducedAsPdf
     else
         fprintf(fid, 'Deep-learning grade: SIMULATED (no trained model found) - not a real prediction.\n');
     end
-    fprintf(fid, 'Quality gate: %s - focus=%.1f (threshold %.1f), entropy=%.2f (threshold %.2f)%s\n\n', ...
+    fprintf(fid, 'Quality gate: %s - focus=%.1f (threshold %.1f), entropy=%.2f (threshold %.2f)%s\n', ...
         r.qualityDecision, focus, focusThresh, ent, entropyThresh, ternary(r.qualityCalibrated, '', ' - UNCALIBRATED PLACEHOLDER, see calibrateQualityThresholds.m'));
+    fprintf(fid, ['Evidence status - landmarks: OD %s / fovea %s (quadrants %s); clinical rule: %s; NV screen: %s; ' ...
+        'explanation: %s; temperature: %s; disagreement: %s%s.\n'], ...
+        r.odValidity, r.foveaValidity, r.quadrantValid, r.ruleStatus, r.nvStatus, ...
+        r.explainStatus, ternary(r.temperatureCalibrated, 'CALIBRATED', 'UNCALIBRATED_FALLBACK'), ...
+        r.disagreement.gradeRelationship, ternary(r.disagreement.escalate, ' - ESCALATE for human review', ''));
+    fprintf(fid, '\n');
 
     fprintf(fid, '-- RULE-BASED CLINICAL GRADE (ICDR 4-2-1 criteria) --\n');
     if isnan(clinicalGrade)
