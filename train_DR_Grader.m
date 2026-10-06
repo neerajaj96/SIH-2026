@@ -179,9 +179,10 @@ vesselMask = runSegmentationNet(vesselNet, enhancedGray, roiMask);
 maheMask = runSegmentationNet(maheNet, enhancedGray, roiMask);
 exudateMask = runSegmentationNet(exudateNet, enhancedGray, roiMask);
 lesionMask = maheMask | exudateMask; % same combination production_inference.m uses for the 5th channel
-fused = single(cat(3, imresize(enhancedRGB, [224 224]), ...
-                      imresize(uint8(vesselMask)*255, [224 224]), ...
-                      imresize(uint8(lesionMask)*255, [224 224])));
+% Stage-2 fix (matches runScreeningPipeline.m): masks nearest, photos bilinear.
+fused = single(cat(3, imresize(enhancedRGB, [224 224], 'bilinear'), ...
+                      imresize(uint8(vesselMask)*255, [224 224], 'nearest'), ...
+                      imresize(uint8(lesionMask)*255, [224 224], 'nearest')));
 end
 
 % ------------------------------------------------------------------
