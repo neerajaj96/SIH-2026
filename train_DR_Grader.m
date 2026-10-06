@@ -29,8 +29,10 @@
 %     Module 4's calibration and Grad-CAM math actually need.
 % =========================================================================
 
-numClasses = 5; % ICDR levels 0-4
-classValues = single(0:numClasses-1)';
+gcfg = gradingConfig(); % frozen contract: 5ch order, 224x224x5, labels 0-4, lambda, seed
+numClasses = gcfg.numClasses; % ICDR levels 0-4
+classValues = gcfg.classValues;
+rng(gcfg.seed); % determinism: head init + shuffle + dropout order all derive from here
 
 disp('Loading pretrained DenseNet-121 as a dlnetwork...');
 try
@@ -74,12 +76,20 @@ net = replaceLayer(net, net.InputNames{1}, ...
     imageInputLayer([224 224 5], 'Name','fusion_input', 'Normalization','zscore'));
 existingNames = string({net.Layers.Name});
 
-convCandidates = existingNames(contains(lower(existingNames), "conv") & ...
-    ~contains(lower(existingNames), ["bn","relu","pool","concat"]));
+% First-conv detection: first convolution2dLayer in graph order with 3
+% input channels (not name-substring matching, which can hit a dense-block
+% conv on renamed graphs). DenseNet-121's stem is a 7x7 stride-2 conv.
 firstConv = [];
-if ~isempty(convCandidates)
-    firstConv = getLayer(net, convCandidates(1));
-    fprintf('Auto-detected first conv layer as "%s" - double-check this against net.Layers if anything looks off.\n', firstConv.Name);
+for L = 1:numel(net.Layers)
+    lyr = net.Layers(L);
+    if isa(lyr, 'nnet.cnn.layer.Convolution2DLayer') && size(lyr.Weights, 3) == 3
+        firstConv = lyr;
+        break;
+    end
+end
+if ~isempty(firstConv)
+    fprintf('First 3-channel conv layer is "%s" (filter %s, %d filters).\n', ...
+        firstConv.Name, mat2str(firstConv.FilterSize), firstConv.NumFilters);
 end
 
 if ~isempty(firstConv) && isprop(firstConv, 'Weights') && ~isempty(firstConv.Weights) && size(firstConv.Weights,3) == 3
@@ -103,28 +113,43 @@ else
              'will disagree on shape.']);
 end
 
-net = initialize(net);
+net = initialize(net); % fills only uninitialized params (new head); pretrained + expanded conv kept
 disp('DenseNet-121 fusion architecture ready: 5-channel input, real softmax head, weights expanded.');
-plot(net);
+try
+    plot(net);
+catch ME
+    warning('train_DR_Grader:noPlot', 'plot(net) skipped (%s) - headless/logged runs do not need it.', ME.message);
+end
+assert(isequal(net.Layers(end).Name, gcfg.headProbName) || ismember(gcfg.headFcName, string({net.Layers.Name})), ...
+    'train_DR_Grader:headCheck - classifier head names unexpected; check dr_fc/prob wiring.');
+outSizes = net.Layers(strcmp({net.Layers.Name}, gcfg.headFcName));
+if ~isempty(outSizes)
+    assert(outSizes.OutputSize == 5, 'train_DR_Grader:headOutputs - dr_fc must have exactly 5 outputs, got %d.', outSizes.OutputSize);
+end
 
-% --- Ordinal-aware training via a hybrid loss (see header comment) ---
-lambda = 0.5; % relative weight of the ordinal penalty vs. cross-entropy - tune on a validation set
-lossFcn = @(Y,T) ordinalSoftmaxLoss(Y, T, classValues, lambda);
+% --- Ordinal-aware training via the audited hybrid loss (ordinalGradingLoss.m) ---
+% Same formulation as before (CE + lambda*E-grade MSE), now with shape,
+% scale and stability guards. Tune lambda ONLY on validation, never test.
+lambda = gcfg.ordinalLambda;
+classWeights = []; % default: unweighted. Median-frequency weights are computed below and only used if useClassWeights=true (val-tuned).
+useClassWeights = false;
+lossFcn = @(Y,T) ordinalGradingLoss(Y, T, classValues, lambda, classWeights);
 
 trainOpts = trainingOptions('adam', ...
-    InitialLearnRate = 1e-4, ...
-    LearnRateSchedule = 'piecewise', ...
-    LearnRateDropFactor = 0.1, ...
-    LearnRateDropPeriod = 5, ...
-    MaxEpochs = 30, ...
-    MiniBatchSize = 16, ...
-    Shuffle = 'every-epoch', ...
-    ValidationFrequency = 30, ...
+    InitialLearnRate = gcfg.train.initialLearnRate, ...
+    LearnRateSchedule = gcfg.train.learnRateSchedule, ...
+    LearnRateDropFactor = gcfg.train.learnRateDropFactor, ...
+    LearnRateDropPeriod = gcfg.train.learnRateDropPeriod, ...
+    MaxEpochs = gcfg.train.maxEpochs, ...
+    MiniBatchSize = gcfg.train.miniBatchSize, ...
+    Shuffle = gcfg.train.shuffle, ...
+    ValidationFrequency = gcfg.train.validationFrequency, ...
     Plots = 'training-progress', ...
-    CheckpointPath = fullfile(pwd,'checkpoints'), ...
-    CheckpointFrequency = 5, ...
-    CheckpointFrequencyUnit = 'epoch');
-if ~isfolder('checkpoints'), mkdir('checkpoints'); end
+    CheckpointFrequency = gcfg.train.checkpointFrequency, ...
+    CheckpointFrequencyUnit = gcfg.train.checkpointFrequencyUnit);
+ckptDir = fullfile(pwd, 'checkpoints', 'grader_densenet121');
+if ~isfolder(ckptDir), mkdir(ckptDir); end
+trainOpts.CheckpointPath = ckptDir;
 
 % --- TRAINING IS NOW ACTIVE (a real MATLAB license + toolboxes are
 % assumed, so there's no more reason to leave this as guidance-only) ---
@@ -144,8 +169,22 @@ S = load('unet_Vessels.mat','net'); vesselNet = S.net;
 S = load('unet_MicroaneurysmsHemorrhages.mat','net'); maheNet = S.net;
 S = load('unet_Exudates.mat','net'); exudateNet = S.net;
 
-[trainSet, valSet, ~, validationStory] = buildGradingDatasets();
+[trainSet, valSet, ~, validationStory, dataManifest] = buildGradingDatasets();
 fprintf('Grading training set built. %s\n', validationStory);
+
+% Class-imbalance audit (P4): report only by default. Enabling weights
+% changes optimization - do so ONLY with a val-measured justification, and
+% the choice is recorded in .meta.json either way (no silent default).
+trainCounts = histcounts([trainSet.icdrGrade], -0.5:4.5);
+medFreq = median(trainCounts(trainCounts > 0));
+classWeightsComputed = medFreq ./ max(trainCounts, 1);
+fprintf('Train class weights (median-frequency, for reference; NOT applied unless useClassWeights=true): %s\n', ...
+    mat2str(round(classWeightsComputed * 100) / 100));
+if useClassWeights
+    classWeights = classWeightsComputed(:);
+    lossFcn = @(Y,T) ordinalGradingLoss(Y, T, classValues, lambda, classWeights);
+    fprintf('Class weights ENABLED (val-justified run) - recorded in metadata.\n');
+end
 
 fusionFcn = @(rawImg) buildFusionTensor(rawImg, vesselNet, maheNet, exudateNet);
 imdsTrain = transform(imageDatastore({trainSet.imagePath}), fusionFcn);
@@ -160,9 +199,32 @@ dsTrain = combine(imdsTrain, labelsTrain);
 dsVal   = combine(imdsVal, labelsVal);
 trainOpts.ValidationData = dsVal;
 
+% Resume-from-latest: a multi-hour run survives crash/restart (per-model
+% dir, so grader and baseline checkpoints never collide).
+resumeFile = localLatestCheckpoint(ckptDir);
+if ~isempty(resumeFile)
+    try
+        S = load(resumeFile);
+        if isfield(S, 'net')
+            net = S.net;
+            fprintf('Resuming grader from checkpoint %s\n', resumeFile);
+        end
+    catch ME
+        warning('train_DR_Grader:resumeFailed', 'Found %s but could not load it (%s) - training from scratch.', resumeFile, ME.message);
+    end
+end
+
 fprintf('Training DenseNet-121 grader on %d images (%d validation)...\n', numel(trainSet), numel(valSet));
 net = trainnet(dsTrain, net, lossFcn, trainOpts);
-saveModelWithMetadata('trained_dr_grader.mat', net, struct('lambda', lambda, 'validationStory', validationStory));
+extra = struct( ...
+    'channelOrder', {gcfg.channelOrder}, 'inputSize', gcfg.inputSize, ...
+    'classMapping', 'categorical(grades,0:4) -> onehot, pred=argmax-1, referable>=2', ...
+    'loss', 'ordinalGradingLoss CE + lambda*E-grade-MSE', 'lambda', lambda, ...
+    'useClassWeights', useClassWeights, 'classWeights', classWeightsComputed, ...
+    'trainCounts', trainCounts, 'valCounts', histcounts([valSet.icdrGrade], -0.5:4.5), ...
+    'seed', gcfg.seed, 'validationStory', validationStory, ...
+    'dataManifest', dataManifest, 'toolboxVersions', localToolboxVersions());
+saveModelWithMetadata('trained_dr_grader.mat', net, extra);
 fprintf('Saved trained_dr_grader.mat\n');
 
 % Temperature calibration is a SEPARATE step (calibrateTemperature.m) run
@@ -174,32 +236,36 @@ disp('Next: run calibrateTemperature.m on the validation split before trusting a
 
 % ------------------------------------------------------------------
 function fused = buildFusionTensor(rawImg, vesselNet, maheNet, exudateNet)
-[isGradeable, enhancedRGB, enhancedGray, ~, ~, roiMask] = assessAndEnhanceImage(rawImg, -Inf, -Inf); %#ok<ASGLU> - never rejects (see preprocessFundusForSegmentation.m's NOTE on quality gating belonging upstream, at the file-list stage)
+% Training-time fusion via the canonical builder (same enhance path +
+% same bilinear/nearest semantics as inference; loud validation inside).
+[~, enhancedRGB, enhancedGray, ~, ~, roiMask] = assessAndEnhanceImage(rawImg, -Inf, -Inf); % never rejects: quality curation belongs at the file-list stage, not per-read
 vesselMask = runSegmentationNet(vesselNet, enhancedGray, roiMask);
 maheMask = runSegmentationNet(maheNet, enhancedGray, roiMask);
 exudateMask = runSegmentationNet(exudateNet, enhancedGray, roiMask);
-lesionMask = maheMask | exudateMask; % same combination production_inference.m uses for the 5th channel
-% Stage-2 fix (matches runScreeningPipeline.m): masks nearest, photos bilinear.
-fused = single(cat(3, imresize(enhancedRGB, [224 224], 'bilinear'), ...
-                      imresize(uint8(vesselMask)*255, [224 224], 'nearest'), ...
-                      imresize(uint8(lesionMask)*255, [224 224], 'nearest')));
+fused = buildGradingFusionTensor(enhancedRGB, vesselMask, maheMask, exudateMask);
 end
 
 % ------------------------------------------------------------------
-function loss = ordinalSoftmaxLoss(Y, T, classValues, lambda)
-% Y: dlarray, softmax probabilities. T: dlarray, one-hot targets, same size.
-% classValues: [0;1;2;3;4], the actual ICDR level each row of Y/T stands for.
-%
-% Plain cross-entropy treats "predicted 0, true 4" the same as "predicted
-% 3, true 4" - equally wrong, even though one is a much more dangerous
-% miss than the other. The added term penalizes the softmax's EXPECTED
-% class value (Y weighted by classValues) for being numerically far from
-% the true class - a soft, differentiable stand-in for ordinal-regression
-% behavior, without giving up the genuine per-class probabilities a plain
-% scalar regression head can't provide.
-ce = crossentropy(Y, T);
-expectedClass = sum(Y .* classValues, 1);
-trueClass = sum(T .* classValues, 1);
-ordinalPenalty = mean((expectedClass - trueClass).^2, 'all');
-loss = ce + lambda * ordinalPenalty;
+function latest = localLatestCheckpoint(ckptDir)
+latest = '';
+d = dir(fullfile(ckptDir, '*.mat'));
+if isempty(d), return; end
+[~, order] = sort([d.datenum]);
+latest = fullfile(d(order(end)).folder, d(order(end)).name);
+end
+
+% ------------------------------------------------------------------
+function v = localToolboxVersions()
+% Records what the model was trained with (P7 reproducibility).
+v = struct();
+try
+    vs = ver;
+    for i = 1:numel(vs)
+        name = matlab.lang.makeValidName(vs(i).Name);
+        v.(name) = vs(i).Version;
+    end
+    v.MATLAB = version;
+catch
+    v.note = 'ver() unavailable - versions not recorded';
+end
 end
