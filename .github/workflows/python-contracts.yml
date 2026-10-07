@@ -19,11 +19,19 @@ jobs:
           for t in tests/test_stage9_security.py tests/test_stage8_telemed.py \
                    tests/test_stage7_bridge.py tests/test_stage4_clinical.py \
                    tests/test_stages123_hardening.py tests/test_stage12_contract.py \
-                   tests/test_stage10_e2e.py tests/python/test_quality_mirror.py; do
+                   tests/test_stage10_e2e.py tests/python/test_quality_mirror.py \
+                   tests/test_stage5_explain.py tests/test_stage6_runtime.py \
+                   tests/test_stage11_runtime.py tests/test_stage12_eval.py \
+                   tests/test_stage13_data.py tests/test_flagship_p0.py \
+                   tests/test_flagship_sre.py tests/test_flagship_ux.py \
+                   tests/test_flagship_eval.py; do
             python3 "$t" || exit 1
           done
           # grading/seg mirrors need their manual runners (pytest-style fns
           # without pytest installed); covered by test_stage10 evidence docs.
+          # Known gap: 3 segmentation pytest-import helpers remain
+          # MATLAB-GATED / runner-gated (see STAGES_1_2_3 handoff); not
+          # silently treated as PASS.
 
   matlab-runtime:
     name: MATLAB runtime (UNEXECUTED, non-gating)

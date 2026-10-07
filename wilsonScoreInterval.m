@@ -28,7 +28,10 @@ function [lo, hi] = wilsonScoreInterval(successes, n, alpha)
 %   alpha     - (optional) significance level, default 0.05 (95% CI)
 %
 % OUTPUTS:
-%   lo, hi - interval bounds, both in [0,1]
+%   lo, hi - interval bounds, both in [0,1], or [NaN NaN] when n==0
+%     (empty denominator: no observations, CI UNAVAILABLE - never a crash,
+%     never a fabricated zero-width band). Callers map NaN to
+%     UNAVAILABLE / NOT_MEASURED.
 %
 % Requires: Statistics and Machine Learning Toolbox (norminv) - already a
 % listed tool for this PS.
@@ -36,8 +39,12 @@ function [lo, hi] = wilsonScoreInterval(successes, n, alpha)
 if nargin < 3 || isempty(alpha)
     alpha = 0.05;
 end
-if n <= 0
-    error('wilsonScoreInterval:invalidN', 'n must be positive (got %g).', n);
+if ~(isscalar(n) && isnumeric(n)) || isnan(n) || n < 0
+    error('wilsonScoreInterval:invalidN', 'n must be a non-negative scalar (got %s).', mat2str(n));
+end
+if n == 0
+    lo = NaN; hi = NaN;
+    return;
 end
 if successes < 0 || successes > n
     error('wilsonScoreInterval:invalidSuccesses', 'successes (%g) must be in [0, n=%g].', successes, n);

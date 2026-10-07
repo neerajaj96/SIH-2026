@@ -85,6 +85,19 @@ def test_freeze_lifecycle():
           "unavailable" in body, "fabrication risk")
     check("test-cohort change forces new version",
           "new evaluation version" in body or "new explicit evaluation" in body, "silent rewrite")
+    check("REJECTED verdict blocks freeze without override",
+          "rejectedDataset" in body and "overrideRejected" in body, "silent freeze")
+    check("parent lineage recorded",
+          "parentCandidateId" in body, "lineage gap")
+    check("stage labels present",
+          "TRAINING_READY" in body and "FINALIZED" in body and "EVALUATION_READY" in body, "stage gap")
+    check("hash method recorded",
+          "hashMethod" in body, "strength unknown")
+    check("attested-not-computed marked",
+          "ATTESTED_NOT_COMPUTED" in body, "false computed claim")
+    check("hashArtifacts helper exists",
+          os.path.isfile(os.path.join(ROOT, "hashArtifacts.m"))
+          and "sha256:" in txt("hashArtifacts.m"), "no computed hashes")
     m1 = content_id("PRE_TRAIN|m|tr|va|te|v1")
     m2 = content_id("PRE_TRAIN|m|tr|va|te|v1")
     check("timestamp-independent identity (same inputs, same ID)", m1 == m2, "")

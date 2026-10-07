@@ -13,6 +13,9 @@ function manifest = evaluationManifest(rows)
 %   exclusionReason ('' if included), provenance (free text, required
 %   non-empty), split ('TRAIN'/'VAL'/'TEST'),
 %   preprocessingVersion, checkpointId, calibrationArtifactId
+%   OPTIONAL provenance detail (recorded when known, never fabricated):
+%   graderCount (NaN unknown), adjudicationRule ('' unknown),
+%   labelDate ('' unknown). Presence is validated; absence stays explicit.
 %
 % VALIDATION (errors loudly, never silently repairs):
 %   - ICDR in {0..4}; split in {TRAIN,VAL,TEST}; provenance non-empty
@@ -55,6 +58,21 @@ for i = 1:n
     if ~isfield(rows(i),'preprocessingVersion'), rows(i).preprocessingVersion = ''; end
     if ~isfield(rows(i),'checkpointId'), rows(i).checkpointId = ''; end
     if ~isfield(rows(i),'calibrationArtifactId'), rows(i).calibrationArtifactId = ''; end
+    % Structured label provenance (Stage-12 protocol section 2): unknown
+    % stays unknown (NaN/''), never a fabricated count or rule.
+    if ~isfield(rows(i),'graderCount') || isempty(rows(i).graderCount)
+        rows(i).graderCount = NaN;
+    end
+    if ~isfield(rows(i),'adjudicationRule') || isempty(rows(i).adjudicationRule)
+        rows(i).adjudicationRule = '';
+    end
+    if ~isfield(rows(i),'labelDate') || isempty(rows(i).labelDate)
+        rows(i).labelDate = '';
+    end
+    if ~isnan(rows(i).graderCount)
+        assert(rows(i).graderCount >= 1 && rows(i).graderCount == floor(rows(i).graderCount), ...
+            'evaluationManifest:badGraderCount - row %d graderCount must be a positive integer or NaN (unknown).', i);
+    end
     assert(ismember(rows(i).labelICDR, 0:4), ...
         'evaluationManifest:badICDR - row %d ICDR=%g not in {0..4}.', i, rows(i).labelICDR);
     assert(ismember(rows(i).split, {'TRAIN','VAL','TEST'}), ...

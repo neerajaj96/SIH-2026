@@ -50,7 +50,12 @@ function results = optimizeResourceAllocation(annualPatients, referableFraction,
 % and buildTelemedModel.m.
 
 if nargin < 1 || isempty(annualPatients),        annualPatients = 100000; end
-if nargin < 2 || isempty(referableFraction),     referableFraction = 0.141; end
+if nargin < 2 || isempty(referableFraction)
+    % Single source of truth (never a forked magic fraction): default comes
+    % from telemedConfig's severityMix derivation. Explicit caller values
+    % still win (sensitivity analysis), but then the caller owns consistency.
+    try, referableFraction = telemedConfig().referableFraction; catch, referableFraction = 0.141; end
+end
 if nargin < 3 || isempty(operatingHoursPerYear), operatingHoursPerYear = 2000; end
 if nargin < 4 || isempty(reviewSecondsPerCase),  reviewSecondsPerCase = 30; end
 if nargin < 5 || isempty(targetWaitMinutes),     targetWaitMinutes = 30; end

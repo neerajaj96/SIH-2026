@@ -167,7 +167,7 @@ def test_queue_bounds():
     h = txt("netrasetu.html")
     check("150-cap FIFO", "LOCAL_QUEUE_MAX = 150" in h, "unbounded growth")
     check("thumbnails only (no raw persistence)",
-          "toQueueRecord" in h and "readAsDataURL" in h and h.count("localStorage.setItem") <= 3, "raw leak")
+          "toQueueRecord" in h and "readAsDataURL" in h and h.count("localStorage.setItem") <= 4, "raw leak")
     check("quota failure surfaced (no silent loss)",
           "quota-unavailable" in h, "silent loss")
     check("reviewer fields separate from AI output",

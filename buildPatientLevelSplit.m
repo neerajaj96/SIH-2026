@@ -52,6 +52,11 @@ function splitAssignment = buildPatientLevelSplit(imagePaths, patientIdFcn, trai
 %   valFrac      - fraction of PATIENTS for validation (default 0.15;
 %                  the remainder, 1-trainFrac-valFrac, goes to test)
 %   seed         - RNG seed for reproducibility (default 42)
+%   labels       - (optional) per-image class vector for label-stratified
+%                  allocation. When omitted/empty the split is UNSTRATIFIED
+%                  (documented limitation: rare classes can starve VAL/TEST;
+%                  check the printed class balance before citing the split).
+%                  Uses a private RandStream (never the global rng state).
 %
 % OUTPUT:
 %   splitAssignment - struct array, one entry per imagePaths{i}, with
@@ -62,6 +67,7 @@ function splitAssignment = buildPatientLevelSplit(imagePaths, patientIdFcn, trai
 if nargin < 3 || isempty(trainFrac), trainFrac = 0.70; end
 if nargin < 4 || isempty(valFrac),   valFrac = 0.15;  end
 if nargin < 5 || isempty(seed),      seed = 42;        end
+if nargin < 6, labels = []; end
 if trainFrac + valFrac >= 1
     error('buildPatientLevelSplit:badFractions', ...
         'trainFrac (%.2f) + valFrac (%.2f) must be < 1 so a nonzero test fraction remains.', trainFrac, valFrac);
@@ -76,14 +82,38 @@ end
 uniquePatients = unique(patientIds, 'stable');
 numPatients = numel(uniquePatients);
 
-rng(seed);
-order = randperm(numPatients);
+% Private stream: reproducible without mutating the caller's global rng.
+rs = RandStream('mt19937ar', 'Seed', seed);
+order = randperm(rs, numPatients);
 nTrain = min(round(trainFrac * numPatients), numPatients);
 nVal   = min(round(valFrac * numPatients), numPatients - nTrain);
 
 trainPatients = uniquePatients(order(1:nTrain));
 valPatients   = uniquePatients(order(nTrain+1 : nTrain+nVal));
 testPatients  = uniquePatients(order(nTrain+nVal+1 : end));
+if ~isempty(labels)
+    % Label-stratified allocation: split each class's patients
+    % proportionally so rare grades reach VAL/TEST when present.
+    assert(numel(labels) == n, 'buildPatientLevelSplit:badLabels - labels must match imagePaths.');
+    trainPatients = {}; valPatients = {}; testPatients = {};
+    trainPatients = {}; valPatients = {}; testPatients = {};
+    cls = unique(labels(:))';
+    for ci = 1:numel(cls)
+        % Majority-label patients for this class (patient -> mode of its images).
+        pInClass = {};
+        for pi = 1:numPatients
+            mem = find(strcmp(patientIds, uniquePatients{pi}));
+            if mode(labels(mem)) == cls(ci), pInClass{end+1} = uniquePatients{pi}; end %#ok<AGROW>
+        end
+        pInClass = pInClass(randperm(rs, numel(pInClass)));
+        nT = round(trainFrac * numel(pInClass));
+        nV = round(valFrac * numel(pInClass));
+        nT = min(nT, numel(pInClass)); nV = min(nV, numel(pInClass) - nT);
+        trainPatients = [trainPatients, pInClass(1:nT)]; %#ok<AGROW>
+        valPatients = [valPatients, pInClass(nT+1:nT+nV)]; %#ok<AGROW>
+        testPatients = [testPatients, pInClass(nT+nV+1:end)]; %#ok<AGROW>
+    end
+end
 
 patientToSplit = containers.Map(uniquePatients, repmat({''}, numPatients, 1));
 for i = 1:numel(trainPatients), patientToSplit(trainPatients{i}) = 'train'; end
@@ -102,6 +132,17 @@ actualTest  = sum(strcmp({splitAssignment.split}, 'test'));
 fprintf('Patient-level split: %d unique group(s) -> %d train / %d val / %d test patients\n', ...
     numPatients, numel(trainPatients), numel(valPatients), numel(testPatients));
 fprintf('Resulting image counts: %d train / %d val / %d test (%d total)\n', actualTrain, actualVal, actualTest, n);
+if ~isempty(labels)
+    for c = unique(labels(:))'
+        fprintf('  label %g: %d train / %d val / %d test images\n', c, ...
+            sum(labels(strcmp({splitAssignment.split}, 'train')) == c), ...
+            sum(labels(strcmp({splitAssignment.split}, 'val')) == c), ...
+            sum(labels(strcmp({splitAssignment.split}, 'test')) == c));
+    end
+else
+    fprintf(['NOTE: unstratified split (no labels supplied) - rare grades may starve VAL/TEST; ' ...
+             'pass labels for stratified allocation.\n']);
+end
 if numPatients == n
     fprintf(['NOTE: every image had a UNIQUE group ID (numPatients == numImages), so this ran as a ' ...
              'plain IMAGE-level split, not a patient-level one - patientIdFcn had nothing to group on. ' ...

@@ -1,4 +1,10 @@
-# Stage-1 + Stage-2 Integration Handoff
+# Stage-1 + Stage-2 Integration Handoff — SUPERSEDED
+
+> Authoritative record: `STAGES_1_2_3_INTEGRATION_HANDOFF.md` (THIS file is
+> retained for history only; on any conflict the 1-2-3 handoff wins).
+> Canonical core is `assessFundusQuality` (`assessAndEnhanceImage` is a
+> legacy wrapper). Point-in-time counts below are stale; see the 1-2-3
+> handoff for current suite tallies.
 
 Merged line: Stage-1 (8 local commits: qualityConfig, assessFundusQuality,
 ROI/enhancement guards, calibrator .mat, dual harness) + Stage-2

@@ -28,13 +28,30 @@ function candidate = freezeCandidate(phase, inputs)
 %     PRE_TRAIN: manifestHash, trainSplitHash, valSplitHash,
 %       testSplitHash, testManifestVersion, configVersions (struct),
 %       codeIdentity (struct with .gitCommitSha + .contentHash, optional -
-%       derived via localCodeIdentity() when absent), preprocessingVersion
+%       derived via localCodeIdentity() when absent), preprocessingVersion,
+%       OPTIONAL 'acceptVerdict' (acceptDataset output): overallStatus
+%       REJECTED blocks PRE_TRAIN unless inputs.overrideRejected==true
+%       (explicit, auditable override - never silent).
 %     FINALIZE: all PRE_TRAIN fields (must match a recorded PRE_TRAIN
 %       candidate - passed as .preTrainCandidate) + checkpointId,
 %       checkpointHash, validationSplitId, calibrationArtifactId,
 %       calibrationArtifactHash, calibrationProvenance, modelConfig,
 %       trainingProvenance (seed, matlab/toolboxes/HW recorded, unknown
 %       marked explicitly)
+%
+%   HASH PROVENANCE: hash inputs accepted as strings are recorded
+%     ATTESTED_NOT_COMPUTED (caller-supplied, not verified by this
+%     function). Prefer hashArtifacts('manifest'|'file') outputs, which
+%     carry a sha256:/fnv1a: method prefix. The candidate records
+%     hashMethod per contentHash so verifiers know the strength.
+%
+%   STAGE MAP (stored candidateState is the contract; stage is the
+%     human-readable MLOps step):
+%     DATA_VALIDATED (acceptDataset ACCEPTED_WITH_NOTES) ->
+%     TEST_FROZEN (testSplitHash recorded first) ->
+%     TRAINING_READY (PRE_TRAIN_CANDIDATE) -> CHECKPOINT_CREATED ->
+%     CALIBRATED_ON_VALIDATION -> FINALIZED (FINALIZED_CANDIDATE) ->
+%     EVALUATION_READY (Stage-14 held-out run; recorded downstream, not here).
 %
 % OUTPUT: candidate struct(candidateId, candidateState, gitCommitSha,
 %   contentHash, manifestHash, trainSplitHash, valSplitHash,
@@ -48,6 +65,18 @@ if strcmp(phase, 'PRE_TRAIN')
         assert(isfield(inputs, f{1}) && ~isempty(inputs.(f{1})), ...
             'freezeCandidate:missingInput - PRE_TRAIN requires %s (freeze TEST first).', f{1});
     end
+    % REJECTED datasets never freeze silently: an explicit auditable
+    % override is required (and recorded in limitations).
+    rejectedOverride = false;
+    if isfield(inputs,'acceptVerdict') && isstruct(inputs.acceptVerdict) && ...
+            isfield(inputs.acceptVerdict,'overallStatus') && ...
+            strcmp(inputs.acceptVerdict.overallStatus, 'REJECTED')
+        if ~(isfield(inputs,'overrideRejected') && isequal(inputs.overrideRejected, true))
+            error(['freezeCandidate:rejectedDataset - acceptDataset verdict is REJECTED; ' ...
+                'refusing PRE_TRAIN. Pass inputs.overrideRejected=true to override explicitly (audited).']);
+        end
+        rejectedOverride = true;
+    end
     if ~isfield(inputs,'codeIdentity') || isempty(inputs.codeIdentity)
         inputs.codeIdentity = localCodeIdentity();
     end
@@ -57,8 +86,16 @@ if strcmp(phase, 'PRE_TRAIN')
         inputs.testSplitHash, inputs.testManifestVersion, localCanon(inputs.configVersions), ...
         inputs.codeIdentity.gitCommitSha, inputs.codeIdentity.contentHash, inputs.preprocessingVersion};
     [candidateId, contentHash] = localContentHash(idMaterial);
+    hashMethod = localHashMethod(contentHash);
+    lims = {'PRE_TRAIN only - not Stage-14-ready until FINALIZED_CANDIDATE exists', ...
+        'caller-supplied hashes recorded ATTESTED_NOT_COMPUTED - recompute via hashArtifacts for computed lineage'};
+    if rejectedOverride
+        lims{end+1} = 'OVERRIDE: frozen despite REJECTED acceptDataset verdict (explicit overrideRejected=true).';
+    end
     candidate = struct('candidateId', candidateId, 'candidateState', 'PRE_TRAIN_CANDIDATE', ...
+        'stage', 'TRAINING_READY', ...
         'gitCommitSha', inputs.codeIdentity.gitCommitSha, 'contentHash', contentHash, ...
+        'hashMethod', hashMethod, ...
         'manifestHash', inputs.manifestHash, 'trainSplitHash', inputs.trainSplitHash, ...
         'valSplitHash', inputs.valSplitHash, 'testSplitHash', inputs.testSplitHash, ...
         'testManifestVersion', inputs.testManifestVersion, ...
@@ -69,7 +106,8 @@ if strcmp(phase, 'PRE_TRAIN')
         'calibrationDataset', '', 'calibrationSplit', '', ...
         'matlabVersion', '', 'toolboxes', {{}}, 'hardware', '', 'seed', NaN, ...
         'createdAt', datestr(now, 30), 'finalizedAt', '', ...
-        'limitations', {{'PRE_TRAIN only - not Stage-14-ready until FINALIZED_CANDIDATE exists'}});
+        'parentCandidateId', '', ...
+        'limitations', {lims});
 elseif strcmp(phase, 'FINALIZE')
     assert(isfield(inputs,'preTrainCandidate'), ...
         'freezeCandidate:missingInput - FINALIZE requires the PRE_TRAIN candidate record.');
@@ -99,7 +137,10 @@ elseif strcmp(phase, 'FINALIZE')
     candidate = pre;
     candidate.candidateId = candidateId;
     candidate.candidateState = 'FINALIZED_CANDIDATE';
+    candidate.stage = 'FINALIZED';
     candidate.contentHash = contentHash;
+    candidate.hashMethod = localHashMethod(contentHash);
+    candidate.parentCandidateId = pre.candidateId;
     candidate.checkpointId = inputs.checkpointId;
     candidate.checkpointHash = inputs.checkpointHash;
     candidate.calibrationArtifactId = inputs.calibrationArtifactId;
@@ -113,7 +154,9 @@ elseif strcmp(phase, 'FINALIZE')
     candidate.hardware = localField(tp, 'hardware', 'unknown');
     candidate.seed = localField(tp, 'seed', NaN);
     candidate.finalizedAt = datestr(now, 30);
-    candidate.limitations = {'Stage-14-ready: evaluate frozen TEST cohort only; never tune on it.'};
+    candidate.limitations = {'Stage-14-ready: evaluate frozen TEST cohort only; never tune on it.', ...
+        'caller-supplied checkpoint/calibration hashes ATTESTED_NOT_COMPUTED - recompute via hashArtifacts for computed lineage', ...
+        'EVALUATION_READY is recorded by the Stage-14 held-out run, not by this freeze.'};
 else
     error('freezeCandidate:badPhase - phase must be PRE_TRAIN or FINALIZE.');
 end
@@ -170,6 +213,15 @@ catch
     h = sprintf('fnv1a:%016x', x);
 end
 id = ['cand_' h(1:min(16, numel(h)))];
+end
+
+function m = localHashMethod(h)
+% The contentHash string carries its method (sha256:/fnv1a:); surface it
+% so verifiers know the strength without parsing.
+if strncmp(h, 'sha256:', 7), m = 'SHA-256 (JVM)';
+elseif strncmp(h, 'fnv1a:', 6), m = 'FNV-1a fallback (no JVM)';
+else, m = 'unknown';
+end
 end
 
 function ci = localCodeIdentity()

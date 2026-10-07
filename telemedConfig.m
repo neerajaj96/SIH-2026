@@ -30,8 +30,10 @@ cfg.targetWaitMinutes     = 30;      % SCENARIO (review-wait SLA)
 cfg.severityLabels = ["NoDR", "Mild", "Moderate", "Severe", "PDR"];
 cfg.severityMix    = [0.827 0.032 0.104 0.009 0.028];
 cfg.severityProvenance = 'ARDA-sourced scenario (~3,941 gradable images, India community screening); NOT locally measured prevalence';
-cfg.referableFraction = 0.141;       % SCENARIO (Moderate+Severe+PDR of the mix above)
-cfg.referableProvenance = 'derived from cfg.severityMix (0.104+0.009+0.028)';
+% Single source of truth: derived from severityMix (Moderate+Severe+PDR),
+% never an independent magic fraction (0.104+0.009+0.028 = 0.141).
+cfg.referableFraction = sum(cfg.severityMix(3:5));
+cfg.referableProvenance = 'derived from cfg.severityMix (Moderate+Severe+PDR); recomputed here, not copied';
 
 % --- Image transmission (ASSUMED/DATA-GATED until field-measured) ---
 cfg.imageMB            = 2.0;    % ASSUMED compressed fundus photo payload

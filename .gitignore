@@ -9,6 +9,18 @@ data/
 !netrasetu.html
 calibrated_temperature.mat
 
+# Secrets / environment (never commit keys)
+.env
+.env.*
+
+# Generated evidence (reports, manifests, env snapshots - tempdir by
+# convention; never track accidental outputs)
+clinical_rule_eval_*.csv
+matlab_env_*.mat
+report_*.pdf
+report_*.txt
+batch_summary_*.csv
+
 # Python (bridge_server.py)
 __pycache__/
 *.py[cod]

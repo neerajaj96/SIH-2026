@@ -155,6 +155,22 @@ select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9
 .offline-note{background:var(--amber-tint);color:var(--amber);border-radius:10px;padding:12px 14px;font-size:13.5px;margin-bottom:20px}
 .section-gap{margin-top:34px}
 .small-h{font-size:14px;font-weight:700;margin:0 0 12px}
+/* Flagship responsive + diagnostics additions (no framework). */
+.diag{font-size:12.5px;color:var(--ink-soft);background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.diag b{color:var(--ink)}
+.diag-row{display:flex;gap:14px;flex-wrap:wrap}
+.diag-row span{white-space:nowrap}
+.plan-scroll{overflow-x:auto}
+@media (max-width:760px){
+  .pipeline{grid-template-columns:repeat(4,1fr)}
+  .compare{grid-template-columns:1fr}
+  .topbar div[style]{flex-wrap:wrap}
+}
+@media (max-width:460px){
+  .pipeline{grid-template-columns:repeat(2,1fr)}
+  main{padding:20px 12px 64px}
+  .grade-num{font-size:32px}
+}
 </style>
 </head>
 <body>
@@ -169,7 +185,7 @@ select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9
     <button data-view="review" role="tab" aria-selected="false">Review queue</button>
     <button data-view="admin" role="tab" aria-selected="false">Capacity</button>
   </div>
-  <div class="demo-badge" id="modeBadge"><span class="dot"></span><span id="modeBadgeText">Checking bridge…</span></div>
+  <div class="demo-badge" id="modeBadge" aria-live="polite"><span class="dot"></span><span id="modeBadgeText">Checking bridge…</span></div>
   <div style="display:flex;gap:8px;align-items:center;margin-top:8px;font-size:12px;color:var(--ink-soft)">
     <label for="bridgeUrl" style="font-weight:600">Bridge</label>
     <input id="bridgeUrl" type="text" value="http://localhost:8000" autocomplete="off" spellcheck="false" style="flex:1;min-width:0">
@@ -202,13 +218,18 @@ select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9
       <button class="btn btn-primary" id="runBtn" disabled>Run screening</button>
     </div>
     <div class="card" id="resultCard">
-      <div class="pipeline" id="pipeline">
+      <div class="pipeline" id="pipeline" aria-live="polite" aria-label="Screening progress">
         <div class="stage" data-i="0"><div class="n">1</div><div class="l">Quality gate</div></div>
-        <div class="stage" data-i="1"><div class="n">2</div><div class="l">Segmentation</div></div>
-        <div class="stage" data-i="2"><div class="n">3</div><div class="l">Grading</div></div>
-        <div class="stage" data-i="3"><div class="n">4</div><div class="l">Explainability</div></div>
+        <div class="stage" data-i="1"><div class="n">2</div><div class="l">Enhancement</div></div>
+        <div class="stage" data-i="2"><div class="n">3</div><div class="l">Vessel/Lesion</div></div>
+        <div class="stage" data-i="3"><div class="n">4</div><div class="l">Grading</div></div>
+        <div class="stage" data-i="4"><div class="n">5</div><div class="l">Clinical rule</div></div>
+        <div class="stage" data-i="5"><div class="n">6</div><div class="l">Explainability</div></div>
+        <div class="stage" data-i="6"><div class="n">7</div><div class="l">Disagreement</div></div>
+        <div class="stage" data-i="7"><div class="n">8</div><div class="l">Review</div></div>
       </div>
-      <div id="resultBody" style="color:var(--ink-soft);font-size:14px">Result appears here once a screening runs.</div>
+      <div id="resultBody" aria-live="polite" style="color:var(--ink-soft);font-size:14px">Result appears here once a screening runs.</div>
+      <div id="diagBody" style="margin-top:14px"></div>
     </div>
   </div>
 </section>
@@ -218,7 +239,8 @@ select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9
   <h1>Referral queue</h1>
   <p class="lede">Cases graded Level 2 and above, or flagged for a disagreement or attention check, wait here for a human read.</p>
   <div id="offlineNoteReview"></div>
-  <div id="queueList"></div>
+  <div style="margin-bottom:12px"><button class="btn-ghost btn" id="clearQueueBtn" type="button" style="padding:8px 14px;font-size:13px">Clear browser-local queue</button></div>
+  <div id="queueList" aria-live="polite"></div>
   <div class="section-gap">
     <h2 class="small-h">Reviewed</h2>
     <div id="reviewedList"></div>
@@ -231,16 +253,16 @@ select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9
   <p class="lede">Live counts from today's queue, alongside the staffing plan computed from the screening program's own numbers.</p>
   <div id="offlineNoteAdmin"></div>
   <div class="stat-row" id="statRow"></div>
-  <div class="card">
-    <h2 class="small-h" style="margin-bottom:4px">Reviewers needed, by review speed</h2>
-    <p style="font-size:13px;color:var(--ink-soft);margin:0 0 16px">Erlang-C queueing model. Referable rate sourced from a real India DR-screening study (14.1% of gradable images), not assumed.</p>
-    <table class="plan-table">
+    <div class="card">
+      <h2 class="small-h" style="margin-bottom:4px">Reviewers needed, by review speed</h2>
+      <p style="font-size:13px;color:var(--ink-soft);margin:0 0 16px">Erlang-C queueing model. Referable rate sourced from a real India DR-screening study (14.1% of gradable images), not assumed.</p>
+      <div class="plan-scroll"><table class="plan-table">
       <thead><tr><th>Scenario</th><th>30-second review</th><th>2-minute review</th></tr></thead>
       <tbody>
         <tr><td>Baseline — 100,000 patients/yr</td><td>1 reviewer</td><td>1 reviewer</td></tr>
         <tr><td>District scale-up — 2,000,000 patients/yr, weaker triage</td><td>3 reviewers</td><td>11 reviewers</td></tr>
       </tbody>
-    </table>
+      </table></div>
   </div>
 </section>
 
@@ -325,6 +347,16 @@ document.querySelectorAll('.roles button').forEach(btn=>{
     document.getElementById('view-'+btn.dataset.view).classList.add('active');
   });
 });
+document.querySelector('.roles').addEventListener('keydown', e=>{
+  // Arrow-key tab navigation (roving focus across the three role tabs).
+  if(e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+  const tabs = Array.from(document.querySelectorAll('.roles button'));
+  const ix = tabs.indexOf(document.activeElement);
+  if(ix < 0) return;
+  e.preventDefault();
+  const nx = e.key === 'ArrowRight' ? (ix + 1) % tabs.length : (ix - 1 + tabs.length) % tabs.length;
+  tabs[nx].focus(); tabs[nx].click();
+});
 
 /* ---------- mock scenario bank (deterministic, cycles per upload) ---------- */
 const CLASS_NAMES = ['No DR','Mild NPDR','Moderate NPDR','Severe NPDR','Proliferative DR'];
@@ -346,6 +378,12 @@ const previewWrap=document.getElementById('previewWrap'), previewImg=document.ge
 const runBtn=document.getElementById('runBtn'), swapBtn=document.getElementById('swapBtn');
 
 dropzone.addEventListener('click', ()=>fileInput.click());
+dropzone.setAttribute('role', 'button');
+dropzone.setAttribute('tabindex', '0');
+dropzone.setAttribute('aria-label', 'Upload a fundus photo');
+dropzone.addEventListener('keydown', e=>{
+  if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); fileInput.click(); }
+});
 dropzone.addEventListener('dragover', e=>{e.preventDefault(); dropzone.classList.add('drag');});
 dropzone.addEventListener('dragleave', ()=>dropzone.classList.remove('drag'));
 dropzone.addEventListener('drop', e=>{
@@ -401,16 +439,18 @@ function stepPipeline(i){
   return new Promise(resolve=>{
     setTimeout(()=>{
       const el=document.querySelector('#pipeline .stage[data-i="'+i+'"]');
+      if(!el){ resolve(); return; }
       el.classList.add('active');
-      setTimeout(()=>{ el.classList.remove('active'); el.classList.add('done'); resolve(); }, 420);
-    }, i===0?80:120);
+      setTimeout(()=>{ el.classList.remove('active'); el.classList.add('done'); resolve(); }, 260);
+    }, i===0?80:90);
   });
 }
+const PIPELINE_STAGES = 8;
 
 runBtn.addEventListener('click', async ()=>{
   runBtn.disabled=true;
   resetPipeline();
-  for(let i=0;i<4;i++){ await stepPipeline(i); }
+  for(let i=0;i<PIPELINE_STAGES;i++){ await stepPipeline(i); }
 
   const pid = document.getElementById('pid').value.trim() || 'unspecified';
   const thumb = await resizeToThumb(previewImg.src, 160);
@@ -436,8 +476,24 @@ runBtn.addEventListener('click', async ()=>{
       if(key) headers['X-API-Key'] = key;
       // Client request ID: allowlisted characters only; the bridge mints
       // one when absent/invalid (see bridge_schema.valid_request_id).
-      headers['X-Request-ID'] = 'web-' + Date.now().toString(36) + '-' + Math.floor(Math.random()*1e6).toString(36);
-      const resp = await fetch(bridgeURL() + '/screen', {method:'POST', headers:headers, body:fd});
+      let ridSuffix = '';
+      try{
+        if(window.crypto && crypto.randomUUID){ ridSuffix = crypto.randomUUID().replace(/-/g,'').slice(0,12); }
+        else { ridSuffix = Date.now().toString(36) + '-' + Math.floor(Math.random()*1e6).toString(36); }
+      }catch(e){ ridSuffix = Date.now().toString(36); }
+      headers['X-Request-ID'] = 'web-' + ridSuffix;
+      const ctl = new AbortController();
+      const tmo = setTimeout(()=>ctl.abort(), 90000);
+      let resp;
+      const tNet = (window.performance && performance.now) ? performance.now() : Date.now();
+      try{ resp = await fetch(bridgeURL() + '/screen', {method:'POST', headers:headers, body:fd, signal: ctl.signal}); }
+      finally{ clearTimeout(tmo); }
+      const netMs = Math.round(((window.performance && performance.now) ? performance.now() : Date.now()) - tNet);
+      state.lastNet = { latencyMs: netMs, at: Date.now() };
+      try{
+        const hdr = resp.headers && resp.headers.get ? resp.headers.get('X-Request-ID') : null;
+        if(hdr) state.lastNet.requestId = hdr;
+      }catch(e){}
       if(resp.status === 429){
         document.getElementById('resultBody').innerHTML = '<div class="flag-box">Screening engine busy — please retry shortly. No result produced.</div>';
       } else if(resp.status === 401){
@@ -501,8 +557,12 @@ function scgradFlags(sc){
   if(sc.gradCamOnDisc) f.push('attention check');
   if(sc.nvStatus === 'PROXY_POSITIVE') f.push('NV screen');
   else if(sc.nv) f.push('NV screen');
-  if(sc.quality && sc.quality.decision === 'BORDERLINE') f.push('borderline quality');
+  const qd = sc.quality && sc.quality.decision;
+  if(qd === 'BORDERLINE') f.push('borderline quality');
+  if(qd === 'FAIL' || qd === 'ERROR') f.push('quality failure — recapture required');
   if(sc.clinical && (sc.clinical.ruleStatus === 'INSUFFICIENT_EVIDENCE' || sc.clinical.ruleStatus === 'INVALID')) f.push('insufficient evidence');
+  const exs = sc.explanation && sc.explanation.status;
+  if(exs && exs !== 'VALID') f.push('explanation ' + String(exs).toLowerCase());
   return f;
 }
 
@@ -520,9 +580,18 @@ function renderResult(sc, pid, mode){
   let html = '<div class="result">' + badgeMode;
   // Quality state (PASS/BORDERLINE/FAIL/ERROR), never hardcoded Passed.
   const qd = (sc.quality && sc.quality.decision) || (sc.roiPassed === false ? 'FAIL' : 'PASS');
-  html += '<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:12.5px;color:var(--ink-soft);font-weight:600">Quality gate</span><span class="badge badge-clear" style="font-size:11.5px">'+escapeHtml(qd)+'</span></div>';
+  const qBadge = qd === 'PASS' ? 'badge-clear' : (qd === 'BORDERLINE' ? 'badge-pending' : 'badge-referable');
+  html += '<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:12.5px;color:var(--ink-soft);font-weight:600">Quality gate</span><span class="badge '+qBadge+'" style="font-size:11.5px">'+escapeHtml(qd)+'</span></div>';
   if(sc.quality && sc.quality.reasons && sc.quality.reasons.length){
     html += '<ul style="font-size:12.5px;color:var(--ink-soft)">'+sc.quality.reasons.map(e=>'<li>'+escapeHtml(e)+'</li>').join('')+'</ul>';
+  }
+  if(sc.quality && sc.quality.guidance && sc.quality.guidance.length){
+    html += '<p style="font-size:12.5px"><b>Recapture guidance:</b> '+sc.quality.guidance.map(escapeHtml).join('; ')+'</p>';
+  }
+  if(qd === 'FAIL' || qd === 'ERROR'){
+    html += '<div class="flag-box">Quality failure — this image is not gradable. Recapture before any grading interpretation; downstream grades below are withheld from clinical use.</div>';
+  } else if(qd === 'BORDERLINE'){
+    html += '<div class="flag-box" style="background:var(--amber-tint);color:var(--amber)">Borderline quality — interpretable with caution. Recapture is preferred; treat grades as provisional pending human review.</div>';
   }
   if(sc.dl == null){
     html += '<div class="grade-row"><span class="grade-label">Deep-learning grade unavailable (simulated/offline model)</span></div>';
@@ -554,24 +623,113 @@ function renderResult(sc, pid, mode){
   }
   const exs = sc.explanation && sc.explanation.status;
   if(exs && exs !== 'VALID'){
-    html += '<div class="flag-box">Explanation reliability: '+escapeHtml(exs)+' \u2014 heatmap should not be relied upon.</div>';
+    html += '<div class="flag-box">Explanation reliability: '+escapeHtml(exs)+' \\u2014 model-attention heatmap should not be relied upon. Segmented-lesion evidence (masks) and rule evidence above remain the auditable basis.</div>';
+  } else if(exs === 'VALID'){
+    html += '<p style="font-size:12.5px;color:var(--ink-soft)">Explanation: model attention (Grad-CAM) is available, but red regions are not proof of disease \\u2014 cross-check segmented-lesion evidence and the rule trace.</p>';
   }
+  const lm = sc.landmarkStatus || {};
+  const quad = lm.quadrant || sc.quadrantValid || null;
+  html += '<div class="evidence"><h4>Clinical reasoning trace</h4><ul>'
+    + '<li>Optic disc landmark: '+escapeHtml(lm.od || 'unavailable')+'</li>'
+    + '<li>Fovea landmark: '+escapeHtml(lm.fovea || 'unavailable')+'</li>'
+    + '<li>Quadrants: '+escapeHtml(quad || 'unavailable')+'</li>'
+    + '<li>Rule evidence: '+(sc.rule == null ? 'insufficient \\u2014 no grade asserted' : 'sufficient for Level '+escapeHtml(sc.rule))+(rs ? ' ('+escapeHtml(rs)+')' : '')+'</li>'
+    + '<li>NV screen: '+escapeHtml(sc.nvStatus || (sc.nv ? 'flagged (legacy)' : 'not flagged'))+' \\u2014 proxy only, never a diagnosis</li>'
+    + '<li>Model: '+escapeHtml(sc.modelPresent ? 'trained weights present' : 'no trained weights (simulated/offline pathway)')+(sc.apiVersion ? ' \\u00b7 API '+escapeHtml(sc.apiVersion) : '')+'</li>'
+    + '</ul></div>';
   html += '<p style="font-size:12px;color:var(--ink-soft);margin-top:14px">Patient '+escapeHtml(pid)+(mode===MODES.DEMO?' &middot; explicit demo data, not a model call.':' &middot; live backend result.')+'</p>';
   html += '</div>';
   document.getElementById('resultBody').innerHTML = html;
+  try{
+    state.lastScreening = { pid: pid, mode: mode, requestId: sc.requestId || null,
+      apiVersion: sc.apiVersion || null, modelPresent: !!sc.modelPresent,
+      temperatureState: (sc.temperature && sc.temperature.state) || null,
+      qualityDecision: qd, ruleStatus: rs, nvStatus: sc.nvStatus || null,
+      explanationStatus: exs || null, at: Date.now() };
+    renderDiagnostics();
+  }catch(e){}
 }
 
-function escapeHtml(s){ return s.replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function escapeHtml(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* ---------- operator diagnostics (safe, non-PHI) ---------- */
+function renderDiagnostics(){
+  const mount = document.getElementById('diagBody');
+  if(!mount) return;
+  const s = state.lastScreening || null;
+  const net = state.lastNet || null;
+  let keyState = 'absent';
+  try{ keyState = apiKey() ? 'present (session-only, never displayed)' : 'absent — bridge will answer 401/503'; }catch(e){}
+  const rows = [
+    '<span><b>Bridge</b> ' + escapeHtml(bridgeURL()) + '</span>',
+    '<span><b>Key</b> ' + escapeHtml(keyState) + '</span>',
+    '<span><b>Mode</b> ' + escapeHtml(appMode.current) + (appMode.bridgeOk ? ' · bridge reachable' : ' · bridge unreachable') + '</span>',
+    s ? '<span><b>Request</b> ' + escapeHtml(s.requestId || (net && net.requestId) || 'n/a') + '</span>' : '<span><b>Request</b> none yet</span>',
+    net ? '<span><b>Latency</b> ~' + escapeHtml(net.latencyMs) + ' ms (upload+inference+convert)</span>' : null,
+    s ? '<span><b>API</b> ' + escapeHtml(s.apiVersion || 'n/a') + '</span>' : null,
+    s ? '<span><b>Model</b> ' + escapeHtml(s.modelPresent ? 'present' : 'absent (simulated/offline pathway)') + '</span>' : null,
+    s ? '<span><b>Temperature</b> ' + escapeHtml(s.temperatureState || 'n/a') + '</span>' : null,
+    s ? '<span><b>Quality</b> ' + escapeHtml(s.qualityDecision || 'n/a') + '</span>' : null,
+    s ? '<span><b>Rule</b> ' + escapeHtml(s.ruleStatus || 'n/a') + '</span>' : null
+  ].filter(Boolean);
+  mount.innerHTML = '<div class="diag"><b>Connection diagnostics</b> — safe to screenshot for ops (no key, no PHI).<div class="diag-row" style="margin-top:6px">'
+    + rows.join('') + '</div>'
+    + (s ? '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn-ghost btn" id="exportTxtBtn" type="button" style="padding:8px 14px;font-size:13px">Export result (.txt)</button>'
+    + '<button class="btn-ghost btn" id="printBtn" type="button" style="padding:8px 14px;font-size:13px">Print</button></div>' : '')
+    + '</div>';
+  const ex = document.getElementById('exportTxtBtn');
+  if(ex) ex.addEventListener('click', exportResultTxt);
+  const pr = document.getElementById('printBtn');
+  if(pr) pr.addEventListener('click', ()=>window.print());
+}
+function exportResultTxt(){
+  // Truthful TXT fallback (never a fake PDF): current screening only.
+  const s = state.lastScreening;
+  if(!s){ return; }
+  const lines = [
+    'NetraSetu screening result (TXT export)',
+    'Mode: ' + s.mode + ' — ' + (s.mode === 'DEMO' ? 'explicit demo data, not a model call' : 'live backend result'),
+    'Quality: ' + (s.qualityDecision || 'n/a'),
+    'Rule: ' + (s.ruleStatus || 'n/a'),
+    'NV: ' + (s.nvStatus || 'n/a'),
+    'Explanation: ' + (s.explanationStatus || 'n/a'),
+    'Temperature: ' + (s.temperatureState || 'n/a'),
+    'Model present: ' + (s.modelPresent ? 'yes' : 'no (simulated/offline pathway)'),
+    'API: ' + (s.apiVersion || 'n/a'),
+    'Request: ' + (s.requestId || ((state.lastNet && state.lastNet.requestId) || 'n/a')),
+    'Limitations: AI output is assistive only; human review required for referable/flagged cases.'
+  ];
+  const blob = new Blob([lines.join('\n') + '\n'], {type: 'text/plain'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'netrasetu-result.txt';
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+function safeThumbUrl(u){
+  // Allowlist for locally-generated thumbnails only: JPEG/PNG data URLs.
+  // Anything else (including attacker-poisoned localStorage values with
+  // `" onerror=` breakouts) renders as an empty placeholder, never markup.
+  if(typeof u !== 'string') return null;
+  if(/^data:image\/(jpeg|png);base64,[A-Za-z0-9+/=]+$/.test(u.slice(0, 64)) || u.indexOf('data:image/jpeg;base64,') === 0 || u.indexOf('data:image/png;base64,') === 0) return u;
+  return null;
+}
 
 /* ---------- review queue: Claude-db where available, else bounded
    browser-local fallback (explicitly non-clinical persistence) ---------- */
 const LOCAL_QUEUE_KEY = 'netrasetu.localQueue.v1';
 const LOCAL_QUEUE_MAX = 150; // hard cap; FIFO evict oldest (never unbounded growth)
+const LOCAL_QUEUE_TTL_MS = 30 * 24 * 3600 * 1000; // 30-day retention for browser-local records
 function localQueueLoad(){
   try{
     const raw = localStorage.getItem(LOCAL_QUEUE_KEY);
     const arr = raw ? JSON.parse(raw) : [];
-    return Array.isArray(arr) ? arr : [];
+    if(!Array.isArray(arr)) return [];
+    // TTL purge: drop records older than retention (shared PHC-machine hygiene).
+    const now = Date.now();
+    const kept = arr.filter(c=>!c.submittedAt || (now - c.submittedAt) < LOCAL_QUEUE_TTL_MS);
+    if(kept.length !== arr.length){ try{ localStorage.setItem(LOCAL_QUEUE_KEY, JSON.stringify(kept.slice(-LOCAL_QUEUE_MAX))); }catch(e){} }
+    return kept;
   }catch(e){ return []; }
 }
 // Returns 'ok' | 'quota-unavailable'. Never throws, never silently drops
@@ -670,6 +828,7 @@ function caseFlags(c){
   if(c.gradCamOnDisc) f.push('attention check');
   if(c.nvStatus === 'PROXY_POSITIVE' || (!c.nvStatus && c.nvFlagged)) f.push('NV screen');
   if(c.qualityDecision === 'BORDERLINE') f.push('borderline quality');
+  if(c.qualityDecision === 'FAIL' || c.qualityDecision === 'ERROR') f.push('quality failure — recapture required');
   if(c.ruleStatus === 'INSUFFICIENT_EVIDENCE' || c.ruleStatus === 'INVALID') f.push('insufficient evidence');
   if(c.explanationStatus && c.explanationStatus !== 'VALID') f.push('explanation ' + c.explanationStatus.toLowerCase());
   return f;
@@ -688,19 +847,23 @@ function renderQueue(cases){
     q.innerHTML = pending.map(c=>{
       const flags=caseFlags(c);
       const g=caseGrades(c);
-      return '<div class="queue-item" data-id="'+escapeHtml(String(c.id))+'">'+
-        (c.thumb?'<img src="'+c.thumb+'" alt="">':'<div style="width:52px;height:52px;border-radius:9px;background:var(--paper)"></div>')+
-        '<div class="meta"><div class="pid">'+escapeHtml(String(c.patientId))+'</div><div class="when">'+timeAgo(c.submittedAt)+(flags.length?' &middot; '+flags.map(escapeHtml).join(', '):'')+'</div></div>'+
+      const thumbUrl = safeThumbUrl(c.thumb);
+      return '<div class="queue-item" role="button" tabindex="0" data-id="'+escapeHtml(c.id)+'">'+
+        (thumbUrl?'<img src="'+escapeHtml(thumbUrl)+'" alt="">':'<div style="width:52px;height:52px;border-radius:9px;background:var(--paper)"></div>')+
+        '<div class="meta"><div class="pid">'+escapeHtml(String(c.patientId))+'</div><div class="when">'+escapeHtml(timeAgo(c.submittedAt))+(flags.length?' &middot; '+flags.map(escapeHtml).join(', '):'')+'</div></div>'+
         (g.length?gradeBadge(Math.max.apply(null,g)):'<span class="badge badge-clear">Not assessable</span>')+
       '</div>';
     }).join('');
-    q.querySelectorAll('.queue-item').forEach(el=>el.addEventListener('click', ()=>openDetail(el.dataset.id)));
+    q.querySelectorAll('.queue-item').forEach(el=>{
+      el.addEventListener('click', ()=>openDetail(el.dataset.id));
+      el.addEventListener('keydown', e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openDetail(el.dataset.id); } });
+    });
   }
   const rl=document.getElementById('reviewedList');
   rl.innerHTML = reviewed.length? reviewed.map(c=>
     '<div class="queue-item" style="cursor:default;opacity:.75">'+
-    (c.thumb?'<img src="'+c.thumb+'" style="width:52px;height:52px;border-radius:9px" alt="">':'<div style="width:52px;height:52px;border-radius:9px;background:var(--paper)"></div>')+
-    '<div class="meta"><div class="pid">'+escapeHtml(String(c.patientId))+'</div><div class="when">reviewed as Level '+c.reviewerGrade+'</div></div>'+
+    (safeThumbUrl(c.thumb)?'<img src="'+escapeHtml(safeThumbUrl(c.thumb))+'" style="width:52px;height:52px;border-radius:9px" alt="">':'<div style="width:52px;height:52px;border-radius:9px;background:var(--paper)"></div>')+
+    '<div class="meta"><div class="pid">'+escapeHtml(String(c.patientId))+'</div><div class="when">reviewed as Level '+escapeHtml(c.reviewerGrade)+'</div></div>'+
     '</div>'
   ).join('') : '<p style="color:var(--ink-soft);font-size:13.5px">No cases reviewed yet.</p>';
 }
@@ -708,17 +871,19 @@ function renderQueue(cases){
 function openDetail(id){
   const c = state.cases.find(x=>String(x.id)===String(id));
   if(!c) return;
+  const lastFocusDetail = document.activeElement;
   const dlTxt = c.dlGrade==null ? 'unavailable' : ('Level '+c.dlGrade+' \u2014 '+escapeHtml(CLASS_NAMES[c.dlGrade]||''));
   const dlConf = (c.confidence==null||c.dlGrade==null) ? '' : ' &middot; '+Math.round(c.confidence*100)+'% conf.';
   const ruleTxt = c.ruleGrade==null
     ? 'Insufficient evidence \u2014 no rule grade asserted'+(c.ruleStatus?' ('+escapeHtml(c.ruleStatus)+')':'')+'. Not Grade 0.'
     : ('Level '+c.ruleGrade+(c.ruleStatus?' ('+escapeHtml(c.ruleStatus)+')':''));
   const mount=document.getElementById('detailMount');
-  mount.innerHTML = '<div class="detail-overlay" id="ov"><div class="detail-panel">'+
-    '<button class="detail-close" id="closeBtn">&times;</button>'+
+  const detailThumb = safeThumbUrl(c.thumb);
+  mount.innerHTML = '<div class="detail-overlay" id="ov"><div class="detail-panel" role="dialog" aria-modal="true" aria-label="Case '+escapeHtml(String(c.patientId))+'">'+
+    '<button class="detail-close" id="closeBtn" aria-label="Close case detail">&times;</button>'+
     '<h2 style="margin:0 0 4px;font-size:19px;font-weight:800;font-family:var(--font-head)">'+escapeHtml(String(c.patientId))+'</h2>'+
-    '<p style="color:var(--ink-soft);font-size:13px;margin:0 0 4px">Submitted '+timeAgo(c.submittedAt)+'</p>'+
-    (c.thumb?'<img src="'+c.thumb+'" style="width:100%;max-width:220px;border-radius:10px;margin:10px 0" alt="">':'')+
+    '<p style="color:var(--ink-soft);font-size:13px;margin:0 0 4px">Submitted '+escapeHtml(timeAgo(c.submittedAt))+'</p>'+
+    (detailThumb?'<img src="'+escapeHtml(detailThumb)+'" style="width:100%;max-width:220px;border-radius:10px;margin:10px 0" alt="">':'')+
     '<div class="compare"><div class="col"><h5>Deep learning</h5><div class="val">'+(c.dlGrade==null?'\u2014':c.dlGrade)+'</div><div style="font-size:12px;color:var(--ink-soft)">'+dlTxt+dlConf+'</div></div>'+
     '<div class="col"><h5>Clinical rule engine</h5><div class="val">'+(c.ruleGrade==null?'\u2014':c.ruleGrade)+'</div><div style="font-size:12px;color:var(--ink-soft)">'+ruleTxt+'</div></div></div>'+
     (caseFlags(c).length?'<div class="flag-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/></svg>'+caseFlags(c).map(escapeHtml).join('; ')+' \u2014 treat with extra scrutiny.</div>':'')+
@@ -728,8 +893,10 @@ function openDetail(id){
     '<label>Notes for the record</label><textarea id="reviewNotes" placeholder="Optional"></textarea>'+
     '<button class="btn btn-primary" id="confirmBtn">Confirm &amp; mark reviewed</button>'+
   '</div></div>';
-  document.getElementById('closeBtn').addEventListener('click', ()=>mount.innerHTML='');
-  document.getElementById('ov').addEventListener('click', e=>{ if(e.target.id==='ov') mount.innerHTML=''; });
+  document.getElementById('closeBtn').addEventListener('click', ()=>{ mount.innerHTML=''; if(lastFocusDetail) lastFocusDetail.focus(); });
+  document.getElementById('ov').addEventListener('click', e=>{ if(e.target.id==='ov'){ mount.innerHTML=''; if(lastFocusDetail) lastFocusDetail.focus(); } });
+  document.addEventListener('keydown', function escClose(e){ if(e.key==='Escape' && document.getElementById('ov')){ mount.innerHTML=''; if(lastFocusDetail) lastFocusDetail.focus(); document.removeEventListener('keydown', escClose); } });
+  document.getElementById('closeBtn').focus();
   document.getElementById('confirmBtn').addEventListener('click', async ()=>{
     const grade = parseInt(document.getElementById('overrideGrade').value,10);
     const notes = document.getElementById('reviewNotes').value;
@@ -765,8 +932,15 @@ function renderStats(cases){
 
 checkBridge();
 initQueue();
-})();initQueue();
+renderDiagnostics();
+document.getElementById('clearQueueBtn').addEventListener('click', ()=>{
+  if(!window.confirm('Clear all browser-local queued cases on this machine? This cannot be undone.')) return;
+  try{ localStorage.removeItem(LOCAL_QUEUE_KEY); }catch(e){}
+  state.cases = localQueueLoad();
+  renderQueue(state.cases); renderStats(state.cases);
+});
 })();
+
 </script>
 </body>
 </html>

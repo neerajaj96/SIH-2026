@@ -24,10 +24,19 @@ changes force a new evaluation version, never a rewrite.
 
 ## Provenance record (unknowns explicit, never fabricated)
 
-candidateId/state, gitCommitSha, contentHash, manifest/train/val/test
-hashes, preprocessing + model config versions, checkpoint ID/hash,
-calibration artifact ID/hash + dataset/split, MATLAB/toolboxes/HW,
-seed, createdAt/finalizedAt (metadata only).
+candidateId/state/stage, gitCommitSha, contentHash + hashMethod
+(SHA-256 vs FNV-1a fallback), parentCandidateId (FINALIZE lineage),
+manifest/train/val/test hashes (ATTESTED_NOT_COMPUTED unless produced by
+`hashArtifacts`), preprocessing + model config versions, checkpoint
+ID/hash, calibration artifact ID/hash + dataset/split, MATLAB/toolboxes/
+HW, seed, createdAt/finalizedAt (metadata only).
+
+Computed lineage: `hashArtifacts('manifest', manifest)` and
+`hashArtifacts('file', path)` produce method-prefixed digests; prefer
+them over caller-supplied opaque strings.
+
+REJECTED datasets block `freezeCandidate('PRE_TRAIN')` unless
+`inputs.overrideRejected=true` (explicit, recorded in limitations).
 
 ## Assumption ledger
 

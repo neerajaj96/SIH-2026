@@ -62,18 +62,27 @@ nUnits = max(unitIds);
 
 % Deterministic stream (RandStream, not global rng state).
 rs = RandStream('mt19937ar', 'Seed', p.Results.Seed);
+% Row index per resampling unit (precomputed once; preserves WITH
+% REPLACEMENT multiplicity: a unit drawn twice contributes its rows twice).
+unitRows = cell(nUnits, 1);
+for u = 1:nUnits
+    unitRows{u} = find(unitIds == u);
+end
 mets = NaN(B, 1);
 reasons = {};
 nInvalid = 0;
 for b = 1:B
     draw = randi(rs, nUnits, [nUnits, 1]);
-    sel = ismember(unitIds, draw);
-    if sum(sel) == 0
+    rows = zeros(0, 1);
+    for k = 1:numel(draw)
+        rows = [rows; unitRows{draw(k)}]; %#ok<AGROW>
+    end
+    if isempty(rows)
         nInvalid = nInvalid + 1; reasons{end+1} = 'empty-resample'; %#ok<AGROW>
         continue;
     end
     try
-        m = metricFcn(values(sel, :));
+        m = metricFcn(values(rows, :));
     catch ME
         nInvalid = nInvalid + 1; reasons{end+1} = ['metric-error: ' ME.identifier]; %#ok<AGROW>
         continue;

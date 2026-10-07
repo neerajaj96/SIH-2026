@@ -59,12 +59,28 @@ function s = localTempSerial()
 % present, '' when absent. dir() is one cheap stat call - no model I/O.
 % Bytes are included so two calibrations within one datenum tick still
 % invalidate (datenum granularity alone could miss sub-second rewrites).
-if isfile('calibrated_temperature.mat')
-    d = dir('calibrated_temperature.mat');
+mp = localArtifactPath('calibrated_temperature.mat');
+if isfile(mp)
+    d = dir(mp);
     s = sprintf('%.6f_%d', d.datenum, d.bytes);
 else
     s = '';
 end
+end
+
+function p = localArtifactPath(name)
+% Same resolution order as loadModelsIfPresent (env -> mfile dir -> pwd).
+env = getenv('SIH_PROJECT_DIR');
+cands = {};
+if ~isempty(env), cands{end+1} = env; end
+try, cands{end+1} = fileparts(mfilename('fullpath')); catch, end
+cands{end+1} = pwd;
+for k = 1:numel(cands)
+    if isempty(cands{k}), continue; end
+    pk = fullfile(cands{k}, name);
+    if isfile(pk), p = pk; return; end
+end
+if ~isempty(env), p = fullfile(env, name); else, p = fullfile(pwd, name); end
 end
 
 function [t, state] = localValidateTemp()
@@ -73,11 +89,12 @@ function [t, state] = localValidateTemp()
 % CALIBRATED_VALID; present-but-bad => CALIBRATED_MISMATCH + fallback;
 % absent => UNCALIBRATED_FALLBACK.
 t = 1.5; state = 'UNCALIBRATED_FALLBACK';
-if ~isfile('calibrated_temperature.mat')
+mp = localArtifactPath('calibrated_temperature.mat');
+if ~isfile(mp)
     return;
 end
 try
-    S = load('calibrated_temperature.mat');
+    S = load(mp);
     okT = isfield(S,'temperatureT') && isscalar(S.temperatureT) && isfinite(S.temperatureT) && S.temperatureT > 0;
     okCls = ~isfield(S,'calibrationProvenance') || ...
         (isequal(S.calibrationProvenance.numClasses, 5) && isequal(S.calibrationProvenance.classOrdering(:), (0:4)'));

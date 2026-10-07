@@ -29,6 +29,13 @@ Not yet real: no trained `.mat` weights, no end-to-end MATLAB run with toolboxes
 1. MATLAB with Image Processing + Deep Learning Toolboxes (+ DenseNet-121 support package, SimEvents for telemed sim).
 2. Fetch data per `datasetRegistry.m`, sort into `data/` (see `validateMaskConventions.m`).
 3. `runSelfTests` → `train_UNet_Segmentation` → `train_DR_Grader` → `calibrateTemperature` → `production_inference` (SIMULATED flag flips once `.mat` files exist).
-4. Demo: open `netrasetu.html`; prod bridge: `pip install fastapi uvicorn python-multipart matlabengine` then `python bridge_server.py`.
+4. Bridge (fail-closed auth — key required, no anonymous mode):
+   `pip install fastapi uvicorn python-multipart matlabengine`
+   `export SIH_API_KEY='<operator key>' SIH_CORS_ORIGINS='http://localhost:8000' SIH_PROJECT_DIR="$PWD"`
+   `python bridge_server.py`, then `GET /health` (liveness) and `GET /health/deep` (`ready` vs `degraded` vs `engine-unavailable` vs `busy`).
+   Operator runbook: `docs/RUNBOOK.md` (auth, CORS, rate limits, smoke `scripts/smoke_e2e.py --strict`).
+5. Demo: open `netrasetu.html` (LIVE default against the bridge; explicit DEMO toggle for illustrative scenarios; OFFLINE disables screening, never mocks).
 
-Do not commit `data/` or `*.mat` (gitignored).
+Do not commit `data/` or `*.mat` (gitignored). Never commit `.env` files, API keys, weights beyond `.mat` gitignore, patient data, or generated `clinical_rule_eval_*.csv` / `matlab_env_*.mat` / `report_*` evidence (see `.gitignore`).
+
+Status vocabulary (single glossary: `docs/GLOSSARY.md`): VERIFIED = checked here; MEASURED = approved real run only; SIMULATED = placeholder plumbing; UNEXECUTED = written, never run here; DATA-/MATLAB-/DEPLOYMENT-/SECURITY-GATED = blocked on that dependency; NOT_MEASURED = default for unevaluated numbers; ASSUMED/SCENARIO = planning values, never field measurements.

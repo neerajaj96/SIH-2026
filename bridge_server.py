@@ -15,8 +15,10 @@ safe (unverified). A second concurrent request gets HTTP 429
 the blocking engine call runs via asyncio.to_thread, never inline in
 an async route.
 
-WHAT THIS DOES NOT DO: database/auth/CORS architecture (later stage);
-frontend hosting (static file served separately).
+WHAT THIS DOES NOT DO: database/frontend hosting (static file served
+separately). Auth (fail-closed shared key), allowlist CORS, sliding-window
+rate limiting, and upload validation ARE implemented here (Stage 9);
+see STAGE9_SECURITY_HANDOFF.md.
 """
 
 import asyncio
@@ -56,6 +58,29 @@ except ImportError as e:
 
 PROJECT_DIR = os.environ.get("SIH_PROJECT_DIR", str(Path(__file__).resolve().parent))
 
+# Isolated temp directory for uploads (created 0700 best-effort; falls
+# back to the platform temp dir when creation fails, never crashes boot).
+_BRIDGE_TMPDIR = os.environ.get("SIH_TMPDIR", os.path.join(tempfile.gettempdir(), "netrasetu-bridge"))
+try:
+    os.makedirs(_BRIDGE_TMPDIR, mode=0o700, exist_ok=True)
+except Exception:
+    _BRIDGE_TMPDIR = tempfile.gettempdir()
+
+
+def _secure_unlink(path: str):
+    """Idempotent temp cleanup (missing/already-removed is not an error)."""
+    try:
+        os.unlink(path)
+    except (OSError, TypeError):
+        pass
+
+
+def _secure_chmod(path: str):
+    try:
+        os.chmod(path, 0o600)
+    except Exception:
+        pass
+
 # ---- Production configuration (fail-closed, validated at startup) ----
 API_KEY = os.environ.get(API_KEY_ENV, "")
 CORS_ORIGINS = [o.strip() for o in os.environ.get(CORS_ORIGINS_ENV, "http://localhost:8000").split(",") if o.strip()]
@@ -72,13 +97,28 @@ if not API_KEY:
     print("SECURITY: SIH_API_KEY unset - /screen will fail closed (503) until configured.", flush=True)
 if not CORS_ORIGINS:
     raise SystemExit("SECURITY: SIH_CORS_ORIGINS resolved empty - refusing to start with no allowed origins.")
+for _o in CORS_ORIGINS:
+    if _o != "*" and not (_o.startswith("http://") or _o.startswith("https://")):
+        raise SystemExit(f"SECURITY: SIH_CORS_ORIGINS entry invalid (must be http(s):// or unset): {_o!r}")
+if "*" in CORS_ORIGINS:
+    raise SystemExit("SECURITY: SIH_CORS_ORIGINS must not contain '*'.")
+if not os.path.isdir(PROJECT_DIR):
+    print(f"CONFIG: SIH_PROJECT_DIR does not exist ({PROJECT_DIR}) - engine start will fail; "
+          f"/health/deep will report degraded.", flush=True)
+if TRUSTED_PROXY and len(TRUSTED_PROXY) > 256:
+    raise SystemExit("SECURITY: SIH_TRUSTED_PROXY value too long.")
+if not (1 <= RATE_LIMIT_PER_MIN <= 1000):
+    raise SystemExit("CONFIG: SIH_RATE_LIMIT_PER_MIN must be within 1..1000.")
 
 # Per-IP sliding-window rate limiter (in-memory; single process).
 # Trust model: direct peer address ONLY, unless SIH_TRUSTED_PROXY names an
 # explicitly configured proxy whose X-Forwarded-For we then honor (first
 # entry). Blindly trusting X-Forwarded-For lets clients spoof identity.
+# Buckets are bounded: idle entries expire after the window and the table
+# is capped so an IP scan cannot grow memory without bound.
 _rate_buckets: dict = {}
 _rate_lock = threading.Lock()
+_RATE_BUCKET_CAP = 5000
 
 
 def _client_ip(request: Request) -> str:
@@ -97,6 +137,14 @@ def _rate_allowed(ip: str) -> bool:
     now = time.monotonic()
     window = 60.0
     with _rate_lock:
+        # Opportunistic reap: drop expired buckets when the table grows.
+        if len(_rate_buckets) > _RATE_BUCKET_CAP:
+            for k in [k for k, v in _rate_buckets.items()
+                      if not v or now - v[-1] >= window]:
+                _rate_buckets.pop(k, None)
+            # Hard cap: evict oldest entries if still overfull (scan defense).
+            while len(_rate_buckets) > _RATE_BUCKET_CAP:
+                _rate_buckets.pop(next(iter(_rate_buckets)), None)
         hits = _rate_buckets.get(ip, [])
         hits = [t for t in hits if now - t < window]
         if len(hits) >= RATE_LIMIT_PER_MIN:
@@ -143,10 +191,21 @@ app.add_middleware(
     allow_origins=CORS_ORIGINS,  # explicit allowlist (default localhost dev); "*" forbidden here
     allow_methods=["POST", "GET"],
     allow_headers=["X-API-Key", "X-Request-ID", "Content-Type"],
+    expose_headers=["X-Request-ID"],  # browser JS must read echoed ID under CORS
+    allow_credentials=False,
+    max_age=600,
 )
 
 _engine = None
 _engine_lock = threading.Lock()  # serializes ALL engine screening calls
+
+
+class BridgeSerializationError(Exception):
+    """matlab_result_to_dict could not interpret the engine result.
+
+    The engine itself may be healthy; callers MUST NOT invalidate/restart
+    it for this class. Mapped to HTTP 500 (failed), never 503 (engine).
+    """
 
 
 def _engine_invalidate():
@@ -189,9 +248,14 @@ def _locked_engine():
     """Yields the live engine once. Lock MUST be held by the caller.
     Raises HTTPException(503) if the engine cannot be started. Never
     yields twice and never returns a dead object."""
+    if not _engine_lock.locked():
+        raise BridgeSerializationError(
+            "internal lock contract violated: _locked_engine without _engine_lock")
     try:
         yield get_engine()
     except HTTPException:
+        raise
+    except BridgeSerializationError:
         raise
     except Exception as e:
         _engine_invalidate()
@@ -200,17 +264,36 @@ def _locked_engine():
 
 def _screen_once(tmp_path: str) -> dict:
     with _locked_engine() as eng:
-        m_result = eng.screenOneImage(tmp_path, nargout=1)
-        return matlab_result_to_dict(m_result)
+        try:
+            m_result = eng.screenOneImage(tmp_path, nargout=1)
+        except HTTPException:
+            raise
+        except Exception as e:
+            # Engine call itself failed -> engine suspect (invalidate+503).
+            _engine_invalidate()
+            raise HTTPException(status_code=503, detail=f"MATLAB engine failed: {e}")
+        try:
+            return matlab_result_to_dict(m_result)
+        except BridgeSerializationError:
+            raise
+        except HTTPException:
+            raise
+        except Exception as e:
+            # Conversion failed on a live engine -> healthy engine, bad
+            # payload shape. Never invalidate; surface as 500 downstream.
+            raise BridgeSerializationError(f"result conversion failed: {e}")
 
 
 def _do_screen(tmp_path: str) -> dict:
     """Runs one screening on the worker thread with crash recovery: on
-    failure the stale engine is invalidated and the call retried exactly
-    once on a fresh engine. Lock MUST be held by the caller (released in
-    finally at the call site)."""
+    ENGINE failure the stale engine is invalidated and the call retried
+    exactly once on a fresh engine. Serialization failures are NOT
+    retried (retrying a healthy engine cannot fix a bad payload shape).
+    Lock MUST be held by the caller (released in finally at call site)."""
     try:
         return _screen_once(tmp_path)
+    except BridgeSerializationError:
+        raise
     except HTTPException:
         pass  # state already invalidated; fall through to the single retry
     _engine_invalidate()
@@ -262,12 +345,23 @@ def matlab_result_to_dict(m_result) -> dict:
         except (KeyError, TypeError, IndexError):
             return default
 
-    evidence = m_result["evidence"]
-    if isinstance(evidence, str):
-        evidence_list = [evidence]
+    def need(key):
+        # Legacy keys are frozen-required: absence is a conversion defect
+        # (HTTP 500), never engine failure (HTTP 503).
+        try:
+            return m_result[key]
+        except (KeyError, TypeError, IndexError) as e:
+            raise BridgeSerializationError(f"missing legacy key: {key}") from e
+
+    try:
+        evidence_raw = m_result["evidence"]
+    except (KeyError, TypeError, IndexError) as e:
+        raise BridgeSerializationError("missing legacy key: evidence") from e
+    if isinstance(evidence_raw, str):
+        evidence_list = [evidence_raw]
     else:
         try:
-            evidence_list = [str(x) for x in list(evidence)]
+            evidence_list = [str(x) for x in list(evidence_raw)]
         except TypeError:
             evidence_list = []
 
@@ -285,17 +379,18 @@ def matlab_result_to_dict(m_result) -> dict:
     return {
         "apiVersion": API_VERSION,
         # Legacy keys (frozen compatibility aliases).
-        "status": str(m_result["status"]),
-        "errorMessage": str(m_result["errorMessage"]),
-        "focus": safe_num(m_result["focus"]),
-        "entropy": safe_num(m_result["entropy"]),
-        "roiPassed": safe_bool(m_result["roiPassed"]),
-        "dl": safe_num(m_result["dl"]),
-        "conf": safe_num(m_result["conf"]),
-        "rule": safe_num(m_result["rule"]),
+        "status": str(need("status")),
+        "errorMessage": str(need("errorMessage")),
+        "focus": safe_num(need("focus")),
+        "entropy": safe_num(need("entropy")),
+        "roiPassed": safe_bool(need("roiPassed")),
+        "dl": safe_num(need("dl")),
+        "conf": safe_num(need("conf")),
+        "rule": safe_num(need("rule")),
         "evidence": evidence_list,
-        "nv": safe_bool(m_result["nv"]),
-        "gradCamOnDisc": safe_bool(m_result["gradCamOnDisc"]),
+        "nv": safe_bool(need("nv")),
+        "nvStatus": safe_str(safe_get("nvStatus")),
+        "gradCamOnDisc": safe_bool(need("gradCamOnDisc")),
         # Canonical nested groups (nullable; null when MATLAB predates them).
         "quality": {
             "decision": safe_str(safe_get("qualityDecision")),
@@ -343,8 +438,22 @@ async def _http_error_shape(request: Request, exc: HTTPException):
     """Safe error envelope: numeric code + allowlisted message + request
     ID. Never traceback text, paths, or engine internals."""
     rid = getattr(getattr(request, "state", None), "rid", None) or new_request_id()
+    headers = {"X-Request-ID": rid}
+    if exc.status_code == 429:
+        headers["Retry-After"] = "5"
     return JSONResponse(status_code=exc.status_code,
                         content={"detail": str(exc.detail)[:300], "requestId": rid},
+                        headers=headers)
+
+
+@app.exception_handler(Exception)
+async def _unhandled_error_shape(request: Request, exc: Exception):
+    """Preserves request-ID correlation for non-HTTP failures."""
+    rid = getattr(getattr(request, "state", None), "rid", None) or new_request_id()
+    _log("unhandled", rid=rid, route=str(getattr(request, "url", ""))[:120],
+         status="error", category="error")
+    return JSONResponse(status_code=500,
+                        content={"detail": SAFE_ERROR_DETAILS["failed"], "requestId": rid},
                         headers={"X-Request-ID": rid})
 
 
@@ -366,7 +475,8 @@ def health_deep(request: Request):
     rid = _request_id(request)
     acquired = _engine_lock.acquire(blocking=False)
     if not acquired:
-        return JSONResponse(status_code=429, content={"status": "busy", "requestId": rid})
+        return JSONResponse(status_code=429, content={"status": "busy", "requestId": rid},
+                            headers={"X-Request-ID": rid, "Retry-After": "5"})
     try:
         try:
             eng = get_engine()
@@ -387,9 +497,11 @@ def health_deep(request: Request):
                      "calibrated_temperature.mat"):
             assets[name] = os.path.isfile(os.path.join(PROJECT_DIR, name))
         ready = engine_ok and on_path and all(assets[k] for k in assets if k != "calibrated_temperature.mat")
+        config_valid = bool(os.path.isdir(PROJECT_DIR)) and bool(CORS_ORIGINS)
         return {"status": "ready" if ready else "degraded", "requestId": rid,
                 "apiVersion": API_VERSION, "engine": engine_ok,
-                "projectFiles": on_path, "models": assets}
+                "projectFiles": on_path, "models": assets,
+                "configValid": config_valid}
     finally:
         _engine_lock.release()
 
@@ -402,12 +514,16 @@ async def screen(request: Request, image: UploadFile = File(...)):
     t0 = time.monotonic()
     rid = _request_id(request)
     ip = _client_ip(request)
+
+    def _elapsed_ms() -> str:
+        return f"{(time.monotonic() - t0) * 1000:.0f}"
+
     if not _rate_allowed(ip):
-        _log("screen", rid=rid, route="/screen", status="rate-limited")
+        _log("screen", rid=rid, route="/screen", status="rate-limited", ms=_elapsed_ms())
         raise HTTPException(status_code=429, detail=SAFE_ERROR_DETAILS["ratelimit"])
     _require_api_key(request)  # 401 wrong/missing key, 503 unconfigured - fail-closed, no bypass
     if not image.content_type or not image.content_type.startswith(ALLOWED_CONTENT_PREFIX):
-        _log("screen", rid=rid, route="/screen", status="rejected", category="badtype")
+        _log("screen", rid=rid, route="/screen", status="rejected", category="badtype", ms=_elapsed_ms())
         raise HTTPException(status_code=400, detail=SAFE_ERROR_DETAILS["badtype"])
     # Streaming size enforcement (never rely on Content-Length alone;
     # works with missing/chunked lengths; oversized payload not retained).
@@ -419,7 +535,8 @@ async def screen(request: Request, image: UploadFile = File(...)):
                 break
             data += chunk
             if len(data) > MAX_UPLOAD_BYTES:
-                _log("screen", rid=rid, route="/screen", status="rejected", category="oversize")
+                _log("screen", rid=rid, route="/screen", status="rejected", category="oversize",
+                     ms=_elapsed_ms())
                 raise HTTPException(status_code=413, detail=SAFE_ERROR_DETAILS["oversize"])
     finally:
         try:
@@ -427,7 +544,7 @@ async def screen(request: Request, image: UploadFile = File(...)):
         except Exception:
             pass
     if not check_size_ok(len(data)) or len(data) == 0:
-        _log("screen", rid=rid, route="/screen", status="rejected", category="empty")
+        _log("screen", rid=rid, route="/screen", status="rejected", category="empty", ms=_elapsed_ms())
         raise HTTPException(status_code=400, detail=SAFE_ERROR_DETAILS["badtype"])
     # Signature + structural validation (provable invalidity only: wrong
     # magic or impossible dimensions reject here; well-formed-but-
@@ -436,14 +553,36 @@ async def screen(request: Request, image: UploadFile = File(...)):
     head = bytes(data[:64])
     kind = detect_image_kind(head)
     if kind is None:
-        _log("screen", rid=rid, route="/screen", status="rejected", category="badmagic")
+        _log("screen", rid=rid, route="/screen", status="rejected", category="badmagic", ms=_elapsed_ms())
         raise HTTPException(status_code=400, detail=SAFE_ERROR_DETAILS["badmagic"])
     dims = probe_jpeg_dimensions(head) if kind == "jpeg" else (
         probe_png_dimensions(head) if kind == "png" else None)
     if dims is not None and (dims[0] <= 0 or dims[1] <= 0
                              or dims[0] > MAX_IMAGE_DIMENSION or dims[1] > MAX_IMAGE_DIMENSION):
-        _log("screen", rid=rid, route="/screen", status="rejected", category="baddims")
+        _log("screen", rid=rid, route="/screen", status="rejected", category="baddims", ms=_elapsed_ms())
         raise HTTPException(status_code=400, detail=SAFE_ERROR_DETAILS["baddims"])
+    # Capability-gated deep decode check: when Pillow is installed (not a
+    # mandatory dependency), verify actual pixels/dimensions before MATLAB
+    # (catches header-spoofed decompression bombs). Absent Pillow ->
+    # header-only validation above (honest, documented).
+    try:
+        from PIL import Image as _PILImage  # type: ignore
+        import io as _io
+        try:
+            with _PILImage.open(_io.BytesIO(bytes(data))) as _im:
+                _im.verify()
+            with _PILImage.open(_io.BytesIO(bytes(data))) as _im2:
+                _w, _h = _im2.size
+                if _w <= 0 or _h <= 0 or _w > MAX_IMAGE_DIMENSION or _h > MAX_IMAGE_DIMENSION:
+                    _log("screen", rid=rid, route="/screen", status="rejected", category="baddims",
+                         ms=_elapsed_ms())
+                    raise HTTPException(status_code=400, detail=SAFE_ERROR_DETAILS["baddims"])
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # undecodable here -> decoder-gated downstream, not a silent grade
+    except ImportError:
+        pass
     size = len(data)
     # Extension is cosmetic only (routing/decoding never trusts it);
     # traversal-hardened to a fixed allowlist shape.
@@ -451,42 +590,44 @@ async def screen(request: Request, image: UploadFile = File(...)):
               ".gif": ".gif", ".bmp": ".bmp"}.get(
         (Path(image.filename or "upload.jpg").suffix or ".jpg").lower(), ".jpg")
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False,
-                                     dir=tempfile.gettempdir()) as tmp:
+                                     dir=_BRIDGE_TMPDIR) as tmp:
         tmp.write(bytes(data))
         tmp_path = tmp.name
+    _secure_chmod(tmp_path)
     del data
 
     acquired = _engine_lock.acquire(blocking=False)
     if not acquired:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        _log("screen", rid=rid, route="/screen", status="busy", size=size)
+        _secure_unlink(tmp_path)
+        _log("screen", rid=rid, route="/screen", status="busy", size=size, ms=_elapsed_ms())
         raise HTTPException(status_code=429, detail=SAFE_ERROR_DETAILS["busy"])
     try:
         import asyncio as _asyncio
+        t_engine = time.monotonic()
         result = await _asyncio.to_thread(_do_screen, tmp_path)
         dt = (time.monotonic() - t0) * 1000
+        engine_ms = (time.monotonic() - t_engine) * 1000
         _log("screen", rid=rid, route="/screen", status=result.get("status"),
-             category="ok", size=size, ms=f"{dt:.0f}")
+             category="ok", size=size, ms=f"{dt:.0f}", detail=f"engine_ms={engine_ms:.0f}")
         result["requestId"] = rid
         return JSONResponse(result)
+    except BridgeSerializationError as e:
+        _log("screen", rid=rid, route="/screen", status="error",
+             category="serialization", size=size, ms=_elapsed_ms())
+        raise HTTPException(status_code=500, detail=SAFE_ERROR_DETAILS["failed"])
     except HTTPException as e:
         _log("screen", rid=rid, route="/screen", status="engine-failure",
-             category="error", size=size)
+             category="error", size=size, ms=_elapsed_ms())
         # Engine-failure detail stays server-side; client gets the safe code.
         raise HTTPException(status_code=e.status_code, detail=SAFE_ERROR_DETAILS.get(
             "engine", "MATLAB engine unavailable."))
     except Exception:
-        _log("screen", rid=rid, route="/screen", status="error", category="error", size=size)
+        _log("screen", rid=rid, route="/screen", status="error", category="error", size=size,
+             ms=_elapsed_ms())
         raise HTTPException(status_code=500, detail=SAFE_ERROR_DETAILS["failed"])
     finally:
         _engine_lock.release()
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        _secure_unlink(tmp_path)
 
 
 if __name__ == "__main__":

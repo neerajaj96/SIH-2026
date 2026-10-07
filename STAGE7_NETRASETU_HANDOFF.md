@@ -62,5 +62,8 @@ separate). Upload guards: type + 15 MB client-side.
   conversion on real engine, `/health/deep`, live `/screen` ×10,
   failure injection, feature-layer confirmation.
 - DATA-GATED: all clinical numbers (unchanged).
-- SECURITY-GATED: auth, CORS tightening (`*` today), audit logging,
-  upload scanning, rate limiting.
+- SECURITY-GATED (Stage-7 scope; SUPERSEDED by Stage-9 implementation):
+  fail-closed shared-key auth (`hmac.compare_digest`, 401/503, no bypass),
+  explicit CORS allowlist (`SIH_CORS_ORIGINS`, `*` refused at startup),
+  sliding-window rate limiting, streaming upload validation. See
+  `STAGE9_SECURITY_HANDOFF.md` and `bridge_server.py`.

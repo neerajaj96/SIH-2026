@@ -12,13 +12,14 @@ function models = loadModelsIfPresent()
 %
 % Requires: nothing beyond base MATLAB.
 
+modelDir = localModelDir();
 models = struct('haveTrainedModels', false, 'calibrationState', 'UNAVAILABLE');
-if isfile('unet_Vessels.mat') && isfile('unet_MicroaneurysmsHemorrhages.mat') && ...
-   isfile('unet_Exudates.mat') && isfile('trained_dr_grader.mat')
-    S = load('unet_Vessels.mat','net'); models.vesselNet = S.net;
-    S = load('unet_MicroaneurysmsHemorrhages.mat','net'); models.maheNet = S.net;
-    S = load('unet_Exudates.mat','net'); models.exudateNet = S.net;
-    S = load('trained_dr_grader.mat','net'); models.drNet = S.net;
+if isfile(fullfile(modelDir, 'unet_Vessels.mat')) && isfile(fullfile(modelDir, 'unet_MicroaneurysmsHemorrhages.mat')) && ...
+   isfile(fullfile(modelDir, 'unet_Exudates.mat')) && isfile(fullfile(modelDir, 'trained_dr_grader.mat'))
+    S = load(fullfile(modelDir, 'unet_Vessels.mat'),'net'); models.vesselNet = S.net;
+    S = load(fullfile(modelDir, 'unet_MicroaneurysmsHemorrhages.mat'),'net'); models.maheNet = S.net;
+    S = load(fullfile(modelDir, 'unet_Exudates.mat'),'net'); models.exudateNet = S.net;
+    S = load(fullfile(modelDir, 'trained_dr_grader.mat'),'net'); models.drNet = S.net;
     % Temperature artifact validation (isfile alone never proves the
     % artifact belongs to THIS model): requires a finite scalar T plus
     % matching class ordering/count when provenance is present. Legacy
@@ -27,9 +28,9 @@ if isfile('unet_Vessels.mat') && isfile('unet_MicroaneurysmsHemorrhages.mat') &&
     % but carry the same scalar contract.
     models.temperatureT = 1.5;
     models.calibrationState = 'UNCALIBRATED_FALLBACK';
-    if isfile('calibrated_temperature.mat')
+    if isfile(fullfile(modelDir, 'calibrated_temperature.mat'))
         try
-            S = load('calibrated_temperature.mat');
+            S = load(fullfile(modelDir, 'calibrated_temperature.mat'));
             okT = isfield(S,'temperatureT') && isscalar(S.temperatureT) && isfinite(S.temperatureT) && S.temperatureT > 0;
             okCls = ~isfield(S,'calibrationProvenance') || ...
                 (isequal(S.calibrationProvenance.numClasses, 5) && isequal(S.calibrationProvenance.classOrdering(:), (0:4)'));
@@ -53,5 +54,37 @@ if isfile('unet_Vessels.mat') && isfile('unet_MicroaneurysmsHemorrhages.mat') &&
         end
     end
     models.haveTrainedModels = true;
+    models.modelDir = modelDir;
 end
+end
+
+function d = localModelDir()
+% Canonical artifact resolution: SIH_PROJECT_DIR (bridge/production) ->
+% this file's folder (MATLAB path) -> pwd (legacy fallback, LOUD).
+% Never silently loads weights from an unrelated working directory: the
+% chosen directory is recorded on the output (models.modelDir) and a
+% warning names the fallback whenever pwd is used while a project dir
+% was available.
+cands = {};
+env = getenv('SIH_PROJECT_DIR');
+if ~isempty(env), cands{end+1} = env; end
+try, cands{end+1} = fileparts(mfilename('fullpath')); catch, end
+cands{end+1} = pwd;
+names = {'unet_Vessels.mat','unet_MicroaneurysmsHemorrhages.mat', ...
+    'unet_Exudates.mat','trained_dr_grader.mat','calibrated_temperature.mat'};
+for k = 1:numel(cands)
+    dk = cands{k};
+    if isempty(dk) || ~isfolder(dk), continue; end
+    for n = 1:numel(names)
+        if isfile(fullfile(dk, names{n}))
+            if strcmp(dk, pwd) && numel(cands) > 1 && ~isempty(env) && isfolder(env) && ~strcmp(env, pwd)
+                warning(['loadModelsIfPresent:cwdFallback - SIH_PROJECT_DIR is set (%s) but holds no artifacts; ' ...
+                    'falling back to pwd (%s). Serving from the wrong CWD silently runs SIMULATED/UNCALIBRATED.'], env, pwd);
+            end
+            d = dk;
+            return;
+        end
+    end
+end
+if ~isempty(env) && isfolder(env), d = env; else, d = pwd; end
 end

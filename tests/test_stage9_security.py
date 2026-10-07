@@ -70,7 +70,9 @@ def test_upload_validation():
     check("extension allowlisted (not trusted for routing)",
           ".jpeg" in txt("bridge_server.py"), "traversal gap")
     check("temp file always unlinked (finally)",
-          txt("bridge_server.py").count("os.unlink(tmp_path)") >= 2, "temp leak")
+          txt("bridge_server.py").count("_secure_unlink(tmp_path)") >= 2, "temp leak")
+    check("temp helper idempotent (missing file is not an error)",
+          "def _secure_unlink" in txt("bridge_server.py"), "helper missing")
 
 
 def test_request_hygiene():

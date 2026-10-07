@@ -13,6 +13,8 @@ nP = 0; nT = 0;
 [nP,nT] = dc(nP,nT,'freeze order (TEST first)',@cOrder);
 [nP,nT] = dc(nP,nT,'timestamp-independent identity',@cIdentity);
 [nP,nT] = dc(nP,nT,'calibration mismatch invalidates',@cMismatch);
+[nP,nT] = dc(nP,nT,'REJECTED blocks freeze without override',@cRejected);
+[nP,nT] = dc(nP,nT,'parent lineage + stage labels',@cParent);
 [nP,nT] = dc(nP,nT,'preprocessing parity pins',@cParity);
 fprintf('\n=== stage13 data contracts (MATLAB, UNEXECUTED HERE): %d / %d ===\n', nP, nT);
 if nP < nT, error('testDataContracts:failures','%d failed',nT-nP); end
@@ -79,6 +81,33 @@ catch
     threw = true;
 end
 assert(threw, 'checkpoint-mismatched calibration must invalidate');
+end
+
+function cRejected()
+base = struct('manifestHash','m','trainSplitHash','tr','valSplitHash','va', ...
+    'testSplitHash','te','testManifestVersion','v1', ...
+    'acceptVerdict', struct('overallStatus','REJECTED'));
+threw = false;
+try, freezeCandidate('PRE_TRAIN', base); catch, threw = true; end
+assert(threw, 'REJECTED dataset must block PRE_TRAIN without override');
+base.overrideRejected = true;
+pre = freezeCandidate('PRE_TRAIN', base);
+assert(any(strcmp(pre.limitations, 'OVERRIDE: frozen despite REJECTED acceptDataset verdict (explicit overrideRejected=true).')), 'override not audited');
+end
+
+function cParent()
+pre = freezeCandidate('PRE_TRAIN', struct('manifestHash','m','trainSplitHash','tr', ...
+    'valSplitHash','va','testSplitHash','te','testManifestVersion','v1'));
+assert(strcmp(pre.stage,'TRAINING_READY'), 'stage label drift');
+assert(~isempty(pre.hashMethod), 'hashMethod missing');
+fin = freezeCandidate('FINALIZE', struct('preTrainCandidate', pre, ...
+    'checkpointId','ckpt','checkpointHash','ch','validationSplitId','VAL', ...
+    'calibrationArtifactId','cal','calibrationArtifactHash','cah', ...
+    'calibrationProvenance', struct('checkpointId','ckpt','splitId','VAL','classOrdering',(0:4)'), ...
+    'modelConfig', struct('arch','densenet121'), ...
+    'trainingProvenance', struct('seed',42)));
+assert(strcmp(fin.parentCandidateId, pre.candidateId), 'parent lineage lost');
+assert(strcmp(fin.stage,'FINALIZED'), 'final stage drift');
 end
 
 function cParity()
