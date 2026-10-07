@@ -57,4 +57,24 @@ MATLAB host — serverless/static hosting can NEVER run the Engine.
 
 TLS, secret rotation, log retention, WAF, pentest, clinical accuracy,
 MATLAB runtime numbers: DEPLOYMENT-/SECURITY-/DATA-GATED (see
-STAGE10 handoff). Nothing here certifies production readiness.
+STAGE10/STAGE11 handoffs). Nothing here certifies production readiness.
+
+## 6. MATLAB prerequisites (Stage-11 runtime validation)
+
+| Requirement | Detail | Status here |
+|---|---|---|
+| MATLAB release | R2022b or newer (dlnetwork, gradCAM) | UNEXECUTED |
+| Image Processing Toolbox | ROI/morphology/CLAHE/resize | UNEXECUTED |
+| Deep Learning Toolbox | dlnetwork, predict, gradCAM | UNEXECUTED |
+| DenseNet-121 support package | `imagePretrainedNetwork("densenet121")` | UNEXECUTED |
+| Statistics & ML Toolbox | `tinv` (consistency CI), tests | UNEXECUTED |
+| Report Generator | optional (PDF path; txt fallback otherwise) | UNEXECUTED |
+| Simulink + SimEvents | Stage-8 model only | UNEXECUTED |
+| MATLAB Engine for Python | version-matched to MATLAB + Python | UNEXECUTED |
+| Model assets | `unet_*.mat`, `trained_dr_grader.mat` in bridge CWD | absent |
+| Calibration assets | `calibrated_temperature.mat`, `qualityThresholds.mat` | absent |
+| Fixtures | synthetic fundus PNG + corrupt/empty files | absent |
+
+Run order on a capable host: `matlab_env_report` → `testStage11Runtime`
+→ `benchmarkStage11` → `scripts/smoke_e2e.py --bridge <url> --key <key>
+--strict`. Record every figure in the Stage-11 handoff evidence table.
