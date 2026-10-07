@@ -30,6 +30,7 @@ function manifest = evaluationManifest(rows)
 
 req = {'dataset','datasetVersion','datasetSource','imageId','labelICDR','split','provenance'};
 n = numel(rows);
+assert(n > 0, 'evaluationManifest:empty - manifest requires at least one row.');
 for i = 1:n
     for k = 1:numel(req)
         assert(isfield(rows(i), req{k}), ...

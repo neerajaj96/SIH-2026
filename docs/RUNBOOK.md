@@ -78,3 +78,18 @@ STAGE10/STAGE11 handoffs). Nothing here certifies production readiness.
 Run order on a capable host: `matlab_env_report` → `testStage11Runtime`
 → `benchmarkStage11` → `scripts/smoke_e2e.py --bridge <url> --key <key>
 --strict`. Record every figure in the Stage-11 handoff evidence table.
+
+## 7. Data acquisition & training (Stage-13, DATA-GATED here)
+
+1. Download datasets per `datasetRegistry.m` access notes into `data/`
+   (manual; mirrors recorded as mirrors, never as official sources).
+2. Gate each: `acceptDataset('<name>')` (counts, labels, corruption,
+   provenance verdict).
+3. Freeze TEST FIRST: `freezeCandidate('PRE_TRAIN', …)` with manifest +
+   split hashes before any selection iteration.
+4. Train with existing seeded scripts (unchanged); calibrate T on VAL
+   only (`calibrateTemperature` + provenance tags).
+5. `freezeCandidate('FINALIZE', …)` with checkpoint + matching VAL
+   calibration; any TEST change mints a new evaluation version.
+6. Stage 14 evaluates the untouched TEST cohort exactly once per
+   finalized candidate. No training curves/metrics exist until then.
